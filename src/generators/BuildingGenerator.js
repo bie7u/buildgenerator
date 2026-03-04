@@ -64,10 +64,14 @@ export class BuildingGenerator {
     const contour = building.contour;
     if (contour.length < 3) return;
 
+    // Build the shape in the XY plane.
+    // contour.y stores world-Z. rotateX(-PI/2) maps (x, y, z) → (x, z, -y),
+    // so we negate contour.y here to cancel that negation and land on the
+    // correct world-Z position after rotation.
     const shape = new THREE.Shape();
-    shape.moveTo(contour[0].x, contour[0].y);
+    shape.moveTo(contour[0].x, -contour[0].y);
     for (let i = 1; i < contour.length; i++) {
-      shape.lineTo(contour[i].x, contour[i].y);
+      shape.lineTo(contour[i].x, -contour[i].y);
     }
     shape.closePath();
 
