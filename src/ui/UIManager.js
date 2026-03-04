@@ -5,9 +5,9 @@ import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { Wall } from '../models/Wall.js';
 
-// Max position difference (metres) for treating a window on another floor as a
-// copy of the currently-selected window (same wall, same offset ± tolerance).
-const WINDOW_COPY_TOLERANCE_M = 0.05;
+// Max position difference (metres) used when matching an element on another
+// floor as a copy of the currently-selected element.
+const COPY_TOLERANCE_M = 0.05;
 
 export class UIManager {
   constructor(app) {
@@ -218,7 +218,25 @@ export class UIManager {
         { label: 'Height (m)', key: 'height', type: 'number', min: 0.3, step: 0.1 },
         { label: 'Sill height (m)', key: 'sillHeight', type: 'number', min: 0, step: 0.1 },
       ], element, () => app.editor.redraw()));
-      container.appendChild(this._makeWindowFloorCopySection(element));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.windows.some(w =>
+          w.wallIndex === element.wallIndex &&
+          Math.abs(w.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M),
+        floor => {
+          if (!floor.windows.some(w =>
+              w.wallIndex === element.wallIndex &&
+              Math.abs(w.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M)) {
+            floor.windows.push(new WindowElement(
+              element.wallIndex, element.offsetAlongWall,
+              element.width, element.height, element.sillHeight));
+          }
+        },
+        floor => {
+          floor.windows = floor.windows.filter(w =>
+            !(w.wallIndex === element.wallIndex &&
+              Math.abs(w.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M));
+        }
+      ));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.windows = floor.windows.filter(e => e !== element);
@@ -238,6 +256,25 @@ export class UIManager {
       ], element, () => app.editor.redraw()));
       container.appendChild(this._makeSelectRow('Opening dir', 'openingDirection',
         ['in', 'out'], element, () => app.editor.redraw()));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.doors.some(d =>
+          d.wallIndex === element.wallIndex &&
+          Math.abs(d.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M),
+        floor => {
+          if (!floor.doors.some(d =>
+              d.wallIndex === element.wallIndex &&
+              Math.abs(d.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M)) {
+            floor.doors.push(new Door(
+              element.wallIndex, element.offsetAlongWall,
+              element.width, element.height, element.openingDirection));
+          }
+        },
+        floor => {
+          floor.doors = floor.doors.filter(d =>
+            !(d.wallIndex === element.wallIndex &&
+              Math.abs(d.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M));
+        }
+      ));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.doors = floor.doors.filter(e => e !== element);
@@ -255,6 +292,25 @@ export class UIManager {
         { label: 'Width (m)', key: 'width', type: 'number', min: 0.5, step: 0.1 },
         { label: 'Depth (m)', key: 'depth', type: 'number', min: 0.5, step: 0.1 },
       ], element, () => app.editor.redraw()));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.balconies.some(b =>
+          b.wallIndex === element.wallIndex &&
+          Math.abs(b.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M),
+        floor => {
+          if (!floor.balconies.some(b =>
+              b.wallIndex === element.wallIndex &&
+              Math.abs(b.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M)) {
+            floor.balconies.push(new Balcony(
+              element.wallIndex, element.offsetAlongWall,
+              element.width, element.depth));
+          }
+        },
+        floor => {
+          floor.balconies = floor.balconies.filter(b =>
+            !(b.wallIndex === element.wallIndex &&
+              Math.abs(b.offsetAlongWall - element.offsetAlongWall) <= COPY_TOLERANCE_M));
+        }
+      ));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.balconies = floor.balconies.filter(e => e !== element);
@@ -270,6 +326,16 @@ export class UIManager {
         { label: 'Width (m)', key: 'width', type: 'number', min: 0.8, step: 0.1 },
         { label: 'Depth (m)', key: 'depth', type: 'number', min: 0.8, step: 0.1 },
       ], element, () => app.editor.redraw()));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.elevator &&
+          floor.elevator.position.distanceTo(element.position) <= COPY_TOLERANCE_M,
+        floor => {
+          floor.elevator = new Elevator(element.position, element.width, element.depth);
+        },
+        floor => {
+          floor.elevator = null;
+        }
+      ));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.elevator = null;
@@ -287,6 +353,17 @@ export class UIManager {
       ], element, () => app.editor.redraw()));
       container.appendChild(this._makeSelectRow('Direction', 'direction',
         ['north', 'south', 'east', 'west'], element, () => app.editor.redraw()));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.stairs &&
+          floor.stairs.position.distanceTo(element.position) <= COPY_TOLERANCE_M,
+        floor => {
+          floor.stairs = new Stairs(
+            element.position, element.width, element.runLength, element.direction);
+        },
+        floor => {
+          floor.stairs = null;
+        }
+      ));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.stairs = null;
@@ -301,6 +378,23 @@ export class UIManager {
       container.appendChild(this._makePropGroup([
         { label: 'Thickness (m)', key: 'thickness', type: 'number', min: 0.05, step: 0.05 },
       ], element, () => app.editor.redraw()));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.internalWalls.some(w =>
+          w.start.distanceTo(element.start) <= COPY_TOLERANCE_M &&
+          w.end.distanceTo(element.end) <= COPY_TOLERANCE_M),
+        floor => {
+          if (!floor.internalWalls.some(w =>
+              w.start.distanceTo(element.start) <= COPY_TOLERANCE_M &&
+              w.end.distanceTo(element.end) <= COPY_TOLERANCE_M)) {
+            floor.internalWalls.push(new Wall(element.start, element.end, element.thickness));
+          }
+        },
+        floor => {
+          floor.internalWalls = floor.internalWalls.filter(w =>
+            !(w.start.distanceTo(element.start) <= COPY_TOLERANCE_M &&
+              w.end.distanceTo(element.end) <= COPY_TOLERANCE_M));
+        }
+      ));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.internalWalls = floor.internalWalls.filter(e => e !== element);
@@ -315,7 +409,13 @@ export class UIManager {
     }
   }
 
-  _makeWindowFloorCopySection(win) {
+  /**
+   * Generic "Copy to floors" section.
+   * @param {(floor: Floor) => boolean} matchFn  - Is the element already on that floor?
+   * @param {(floor: Floor) => void}    copyFn   - Copy element to that floor.
+   * @param {(floor: Floor) => void}    removeFn - Remove element from that floor.
+   */
+  _makeFloorCopySection(matchFn, copyFn, removeFn) {
     const app = this.app;
     const floors = app.building.floors;
 
@@ -329,12 +429,6 @@ export class UIManager {
     header.textContent = 'Copy to floors';
     section.appendChild(header);
 
-    // A window on another floor "belongs" to this copy set if it has the
-    // same wall and position (within WINDOW_COPY_TOLERANCE_M).
-    const matches = w =>
-      w.wallIndex === win.wallIndex &&
-      Math.abs(w.offsetAlongWall - win.offsetAlongWall) <= WINDOW_COPY_TOLERANCE_M;
-
     for (let i = 0; i < floors.length; i++) {
       if (i === app.currentFloorIndex) continue;
 
@@ -347,7 +441,7 @@ export class UIManager {
       cb.type = 'checkbox';
       cb.id = cbId;
       cb.style.cursor = 'pointer';
-      cb.checked = floors[i].windows.some(matches);
+      cb.checked = matchFn(floors[i]);
 
       const lbl = document.createElement('label');
       lbl.htmlFor = cbId;
@@ -357,14 +451,9 @@ export class UIManager {
       cb.addEventListener('change', () => {
         const targetFloor = app.building.floors[i];
         if (cb.checked) {
-          if (!targetFloor.windows.some(matches)) {
-            targetFloor.windows.push(new WindowElement(
-              win.wallIndex, win.offsetAlongWall,
-              win.width, win.height, win.sillHeight
-            ));
-          }
+          copyFn(targetFloor);
         } else {
-          targetFloor.windows = targetFloor.windows.filter(w => !matches(w));
+          removeFn(targetFloor);
         }
         app.editor.redraw();
         app.ui.updateBuildingInfo();
