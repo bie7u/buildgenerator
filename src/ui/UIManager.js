@@ -168,6 +168,11 @@ export class UIManager {
   }
 
   // ── Floor selector ────────────────────────────────────────────────────────
+  /** Returns the display label for a floor option (shared formatting helper). */
+  _floorLabel(floor, index) {
+    return `Floor ${index + 1}  (${floor.height.toFixed(1)}m)`;
+  }
+
   _updateFloorSelector() {
     const sel = document.getElementById('floor-select');
     const prevIdx = parseInt(sel.value, 10) || 0;
@@ -176,7 +181,7 @@ export class UIManager {
     for (let i = 0; i < floors.length; i++) {
       const opt = document.createElement('option');
       opt.value = i;
-      opt.textContent = `Floor ${i + 1}  (${floors[i].height.toFixed(1)}m)`;
+      opt.textContent = this._floorLabel(floors[i], i);
       sel.appendChild(opt);
     }
     const clampedIdx = Math.min(prevIdx, floors.length - 1);
@@ -409,7 +414,7 @@ export class UIManager {
     for (let i = 0; i < floors.length; i++) {
       const opt = document.createElement('option');
       opt.value = i;
-      opt.textContent = `Floor ${i + 1}  (${floors[i].height.toFixed(1)}m)`;
+      opt.textContent = this._floorLabel(floors[i], i);
       sel.appendChild(opt);
     }
     sel.value = currentVal;

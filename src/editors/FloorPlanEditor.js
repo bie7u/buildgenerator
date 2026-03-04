@@ -53,6 +53,9 @@ function makeFilledRect(cx, cz, w, d, color, yOff = 0.01) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// Radius (metres) within which a mouse click is treated as "on" a vertex
+const SNAP_THRESHOLD = 0.5;
+
 export class FloorPlanEditor {
   constructor(sceneManager, building, app) {
     this.sm = sceneManager;
@@ -104,14 +107,14 @@ export class FloorPlanEditor {
     this._isDragging = false;
     this._dragTarget = null;
     this.selectedElement = null;
-    this.app.ui.clearProperties();
+    if (this.app.ui) this.app.ui.clearProperties();
     this.redraw();
   }
 
   setFloor(index) {
     this.currentFloorIndex = index;
     this.selectedElement = null;
-    this.app.ui.clearProperties();
+    if (this.app.ui) this.app.ui.clearProperties();
     this.redraw();
   }
 
@@ -217,7 +220,7 @@ export class FloorPlanEditor {
     // Close if near first point
     if (this._previewPoints.length >= 3) {
       const first = this._previewPoints[0];
-      if (pos.distanceTo(first) < 0.5) {
+      if (pos.distanceTo(first) < SNAP_THRESHOLD) {
         this._closeContour();
         return;
       }
@@ -345,7 +348,7 @@ export class FloorPlanEditor {
   // ── Select / drag ─────────────────────────────────────────────────────────
   _handleSelectDown(pos, e) {
     // Try contour vertices first
-    const vIdx = this._findNearestContourVertex(pos, 0.5);
+    const vIdx = this._findNearestContourVertex(pos, SNAP_THRESHOLD);
     if (vIdx !== -1) {
       this._isDragging = true;
       this._dragTarget = { type: 'contour-vertex', index: vIdx };
@@ -357,14 +360,14 @@ export class FloorPlanEditor {
     if (floor) {
       for (let wi = 0; wi < floor.internalWalls.length; wi++) {
         const wall = floor.internalWalls[wi];
-        if (pos.distanceTo(wall.start) < 0.5) {
+        if (pos.distanceTo(wall.start) < SNAP_THRESHOLD) {
           this._isDragging = true;
           this._dragTarget = { type: 'wall-start', wallIndex: wi };
           this.selectedElement = wall;
           this.app.ui.showProperties(wall);
           return;
         }
-        if (pos.distanceTo(wall.end) < 0.5) {
+        if (pos.distanceTo(wall.end) < SNAP_THRESHOLD) {
           this._isDragging = true;
           this._dragTarget = { type: 'wall-end', wallIndex: wi };
           this.selectedElement = wall;

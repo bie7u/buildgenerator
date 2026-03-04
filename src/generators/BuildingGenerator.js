@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 
+// Stair geometry constants (all in metres)
+const MAX_TREAD_DEPTH_M = 0.30;   // maximum depth of a single stair tread
+const RISER_HEIGHT_M    = 0.17;   // nominal riser height used to compute step count
+
 export class BuildingGenerator {
   constructor(sceneManager) {
     this.sm = sceneManager;
@@ -352,9 +356,9 @@ export class BuildingGenerator {
     const runLen = stairs.runLength;
     const floorH = floor.height;
 
-    const numSteps = Math.max(3, Math.round(floorH / 0.17));
+    const numSteps = Math.max(3, Math.round(floorH / RISER_HEIGHT_M));
     const riserH = floorH / numSteps;
-    const treadD = Math.min(runLen / numSteps, 0.30);
+    const treadD = Math.min(runLen / numSteps, MAX_TREAD_DEPTH_M);
 
     const dirMap = {
       north: 0,
