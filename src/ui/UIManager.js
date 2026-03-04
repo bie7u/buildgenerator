@@ -5,6 +5,10 @@ import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { Wall } from '../models/Wall.js';
 
+// Max position difference (metres) for treating a window on another floor as a
+// copy of the currently-selected window (same wall, same offset ± tolerance).
+const WINDOW_COPY_TOLERANCE_M = 0.05;
+
 export class UIManager {
   constructor(app) {
     this.app = app;
@@ -214,6 +218,7 @@ export class UIManager {
         { label: 'Height (m)', key: 'height', type: 'number', min: 0.3, step: 0.1 },
         { label: 'Sill height (m)', key: 'sillHeight', type: 'number', min: 0, step: 0.1 },
       ], element, () => app.editor.redraw()));
+      container.appendChild(this._makeWindowFloorCopySection(element));
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.windows = floor.windows.filter(e => e !== element);
@@ -308,6 +313,69 @@ export class UIManager {
     } else {
       this.clearProperties();
     }
+  }
+
+  _makeWindowFloorCopySection(win) {
+    const app = this.app;
+    const floors = app.building.floors;
+
+    if (floors.length <= 1) return document.createDocumentFragment();
+
+    const section = document.createElement('div');
+    section.className = 'prop-group';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;margin-top:4px;';
+    header.textContent = 'Copy to floors';
+    section.appendChild(header);
+
+    // A window on another floor "belongs" to this copy set if it has the
+    // same wall and position (within WINDOW_COPY_TOLERANCE_M).
+    const matches = w =>
+      w.wallIndex === win.wallIndex &&
+      Math.abs(w.offsetAlongWall - win.offsetAlongWall) <= WINDOW_COPY_TOLERANCE_M;
+
+    for (let i = 0; i < floors.length; i++) {
+      if (i === app.currentFloorIndex) continue;
+
+      const row = document.createElement('div');
+      row.className = 'prop-row';
+      row.style.gap = '6px';
+
+      const cbId = `copy-floor-cb-${i}`;
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.id = cbId;
+      cb.style.cursor = 'pointer';
+      cb.checked = floors[i].windows.some(matches);
+
+      const lbl = document.createElement('label');
+      lbl.htmlFor = cbId;
+      lbl.textContent = `Floor ${i + 1}  (${floors[i].height.toFixed(1)}m)`;
+      lbl.style.cssText = 'cursor:pointer;flex:1;';
+
+      cb.addEventListener('change', () => {
+        const targetFloor = app.building.floors[i];
+        if (cb.checked) {
+          if (!targetFloor.windows.some(matches)) {
+            targetFloor.windows.push(new WindowElement(
+              win.wallIndex, win.offsetAlongWall,
+              win.width, win.height, win.sillHeight
+            ));
+          }
+        } else {
+          targetFloor.windows = targetFloor.windows.filter(w => !matches(w));
+        }
+        app.editor.redraw();
+        app.ui.updateBuildingInfo();
+      });
+
+      row.appendChild(cb);
+      row.appendChild(lbl);
+      section.appendChild(row);
+    }
+
+    return section;
   }
 
   _makePropGroup(fields, element, onChange) {
