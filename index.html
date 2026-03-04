@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Apartment Building Generator</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<div id="app">
+
+  <!-- TOP TOOLBAR -->
+  <div id="toolbar">
+    <div class="toolbar-section toolbar-views">
+      <span class="toolbar-label">VIEW</span>
+      <button id="btn-2d" class="toolbar-btn active" title="2D Floor Plan Editor">2D Editor</button>
+      <button id="btn-3d" class="toolbar-btn" title="3D Building View">3D View</button>
+    </div>
+
+    <div class="toolbar-section toolbar-floors">
+      <span class="toolbar-label">FLOOR</span>
+      <select id="floor-select" title="Select floor"></select>
+      <button id="btn-add-floor" class="toolbar-btn icon-btn" title="Add floor above">+</button>
+      <button id="btn-remove-floor" class="toolbar-btn icon-btn" title="Remove top floor">−</button>
+    </div>
+
+    <div class="toolbar-section toolbar-actions">
+      <button id="btn-generate" class="toolbar-btn action-btn" title="Generate 3D model from floor plan">Generate 3D</button>
+      <button id="btn-export" class="toolbar-btn action-btn" title="Export as glTF file">Export glTF</button>
+    </div>
+
+    <div class="toolbar-section toolbar-info">
+      <span id="toolbar-info-text" class="info-text">Draw a floor contour to begin</span>
+    </div>
+  </div>
+
+  <!-- MAIN AREA -->
+  <div id="main">
+
+    <!-- LEFT PANEL: Tools + Settings -->
+    <div id="left-panel">
+      <div class="panel-section">
+        <div class="panel-title">TOOLS</div>
+        <button class="tool-btn active" data-tool="select" title="Select and move elements">Select</button>
+        <button class="tool-btn" data-tool="draw-contour" title="Draw building outline">Draw Contour</button>
+        <button class="tool-btn" data-tool="draw-wall" title="Draw internal walls">Add Wall</button>
+        <button class="tool-btn" data-tool="add-window" title="Click on a wall to add a window">Add Window</button>
+        <button class="tool-btn" data-tool="add-door" title="Click on a wall to add a door">Add Door</button>
+        <button class="tool-btn" data-tool="add-balcony" title="Click on a wall to add a balcony">Add Balcony</button>
+        <button class="tool-btn" data-tool="add-elevator" title="Click to place an elevator shaft">Add Elevator</button>
+        <button class="tool-btn" data-tool="add-stairs" title="Click to place a staircase">Add Stairs</button>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">BUILDING SETTINGS</div>
+
+        <label class="setting-label" for="wall-thickness">Wall Thickness (m)</label>
+        <input type="number" id="wall-thickness" class="prop-input" value="0.2" min="0.05" max="1.0" step="0.05" />
+
+        <label class="setting-label" for="floor-height">Floor Height (m)</label>
+        <input type="number" id="floor-height" class="prop-input" value="2.7" min="1.5" max="6.0" step="0.1" />
+
+        <div class="setting-row">
+          <input type="checkbox" id="independent-floors" />
+          <label for="independent-floors">Independent Floors</label>
+        </div>
+
+        <div class="setting-row">
+          <input type="checkbox" id="show-grid" checked />
+          <label for="show-grid">Show Grid</label>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">LEGEND</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#ffcc00"></span>Contour</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#8844ff"></span>Internal Walls</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#44ffff"></span>Windows</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#ffff44"></span>Doors</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#44ff88"></span>Balconies</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#ff4444"></span>Elevator</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#ff8844"></span>Stairs</div>
+      </div>
+    </div>
+
+    <!-- CENTER: Canvas -->
+    <div id="canvas-container">
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <!-- RIGHT PANEL: Properties -->
+    <div id="right-panel">
+      <div class="panel-section">
+        <div class="panel-title">PROPERTIES</div>
+        <div id="properties-content">
+          <p class="hint-text">Select an element to view and edit its properties.</p>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">INFO</div>
+        <div id="building-info">
+          <div class="info-row"><span class="info-key">Floors:</span><span id="info-floors">1</span></div>
+          <div class="info-row"><span class="info-key">Contour pts:</span><span id="info-contour">0</span></div>
+          <div class="info-row"><span class="info-key">Int. Walls:</span><span id="info-walls">0</span></div>
+          <div class="info-row"><span class="info-key">Windows:</span><span id="info-windows">0</span></div>
+          <div class="info-row"><span class="info-key">Doors:</span><span id="info-doors">0</span></div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-title">QUICK ACTIONS</div>
+        <button class="tool-btn" id="btn-clear-floor">Clear Floor Elements</button>
+        <button class="tool-btn" id="btn-clear-contour">Clear Contour</button>
+        <button class="tool-btn" id="btn-reset-all">Reset All</button>
+      </div>
+    </div>
+
+  </div><!-- /#main -->
+
+  <!-- STATUS BAR -->
+  <div id="status-bar">
+    <span id="status-position">X: 0.0  Z: 0.0</span>
+    <span id="status-mode">Mode: Select</span>
+    <span id="status-hint">Click on canvas to start drawing</span>
+  </div>
+
+</div><!-- /#app -->
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
