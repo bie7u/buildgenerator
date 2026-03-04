@@ -277,7 +277,10 @@ export class FloorPlanEditor {
     } else {
       const floor = this.currentFloor;
       if (floor && this._wallStart.distanceTo(pos) > 0.1) {
-        floor.internalWalls.push(new Wall(this._wallStart, pos, this.building.wallThickness));
+        const wall = new Wall(this._wallStart, pos, this.building.wallThickness);
+        floor.internalWalls.push(wall);
+        this.selectedElement = wall;
+        this.app.ui.showProperties(wall);
         this.app.ui.updateBuildingInfo();
       }
       this._isDrawingWall = false;
