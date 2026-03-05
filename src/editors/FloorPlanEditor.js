@@ -56,9 +56,6 @@ function makeFilledRect(cx, cz, w, d, color, yOff = 0.01) {
 // ──────────────────────────────────────────────────────────────────────────
 // Radius (metres) within which a mouse click is treated as "on" a vertex
 const SNAP_THRESHOLD = 0.5;
-// Extra click tolerance (metres) added to half the floor-hole's size when
-// detecting whether a click lands inside the hole's bounding box.
-const FLOOR_HOLE_SELECTION_BUFFER_M = 0.3;
 
 /**
  * Renders the floor contour as a semi-transparent filled shape (ghost fill).
@@ -106,6 +103,10 @@ export class FloorPlanEditor {
     this._isDrawingWall = false;
     this._wallStart = null;
 
+    // Draw-floor-hole state
+    this._isDrawingFloorHole = false;
+    this._floorHolePoints = [];
+
     // Pan state
     this._isPanning = false;
     this._panStart = null;
@@ -134,6 +135,8 @@ export class FloorPlanEditor {
     this.tool = tool;
     this._isDrawingContour = false;
     this._previewPoints = [];
+    this._isDrawingFloorHole = false;
+    this._floorHolePoints = [];
     this._isDrawingWall = false;
     this._wallStart = null;
     this._isDragging = false;
@@ -171,6 +174,7 @@ export class FloorPlanEditor {
 
     switch (this.tool) {
       case 'select':         this._handleSelectDown(pos, e); break;
+      case 'move':           this._handleMoveDown(pos); break;
       case 'draw-contour':   this._handleDrawContourDown(pos); break;
       case 'draw-wall':      this._handleDrawWallDown(pos); break;
       case 'add-window':     this._handleAddOpeningDown(pos, 'window'); break;
@@ -203,7 +207,11 @@ export class FloorPlanEditor {
     }
 
     if (this._isDragging && this._dragTarget) {
-      this._handleDragMove(pos);
+      if (this.tool === 'move') {
+        this._handleMoveDragMove(pos);
+      } else {
+        this._handleDragMove(pos);
+      }
       return;
     }
 
@@ -214,6 +222,9 @@ export class FloorPlanEditor {
     } else if (this.tool === 'draw-wall' && this._isDrawingWall && this._wallStart) {
       this.redraw();
       this._drawPreviewLine(this._wallStart, pos, 0x8844ff);
+    } else if (this.tool === 'add-floor-hole' && this._isDrawingFloorHole && this._floorHolePoints.length > 0) {
+      this.redraw();
+      this._drawPreviewFloorHole(pos);
     }
   }
 
@@ -240,6 +251,9 @@ export class FloorPlanEditor {
     if (this.app.mode !== '2d') return;
     if (this.tool === 'draw-contour' && this._previewPoints.length >= 3) {
       this._closeContour();
+    }
+    if (this.tool === 'add-floor-hole' && this._floorHolePoints.length >= 3) {
+      this._closeFloorHole();
     }
   }
 
@@ -381,16 +395,64 @@ export class FloorPlanEditor {
     this.redraw();
   }
 
-  // ── Add floor hole ────────────────────────────────────────────────────────
+  // ── Add floor hole (drawn polygon) ───────────────────────────────────────
   _handleAddFloorHoleDown(pos) {
+    if (!this._isDrawingFloorHole) {
+      this._isDrawingFloorHole = true;
+      this._floorHolePoints = [];
+    }
+
+    // Close if near first point (≥3 points already placed)
+    if (this._floorHolePoints.length >= 3) {
+      const first = this._floorHolePoints[0];
+      if (pos.distanceTo(first) < SNAP_THRESHOLD) {
+        this._closeFloorHole();
+        return;
+      }
+    }
+
+    this._floorHolePoints.push(pos.clone());
+    this.redraw();
+    this._drawPreviewFloorHole(pos);
+  }
+
+  _closeFloorHole() {
     const floor = this.currentFloor;
-    if (!floor) return;
-    const hole = new FloorHole(pos, 1.0, 1.0);
+    if (!floor || this._floorHolePoints.length < 3) return;
+    const hole = new FloorHole(this._floorHolePoints.map(p => p.clone()));
     floor.floorHoles.push(hole);
     this.selectedElement = hole;
     this.app.ui.showProperties(hole);
     this.app.ui.updateBuildingInfo();
+    this._isDrawingFloorHole = false;
+    this._floorHolePoints = [];
     this.redraw();
+  }
+
+  _drawPreviewFloorHole(cursor) {
+    const pts = this._floorHolePoints;
+    if (pts.length === 0) return;
+
+    if (pts.length >= 2) {
+      const line = makeLine(pts, 0xff4444);
+      this.sm.editGroup.add(line);
+    }
+
+    // Dashed preview line to cursor
+    const dash = makeDashedLine([pts[pts.length - 1], cursor], 0xff6666);
+    this.sm.editGroup.add(dash);
+
+    // Close hint circle at first point
+    const fc = makeCircle(pts[0].x, pts[0].y, 0.3, 0xff4444);
+    this.sm.editGroup.add(fc);
+
+    // Dots for each placed point
+    for (const p of pts) {
+      this.sm.editGroup.add(makeCircle(p.x, p.y, 0.12, 0xff6666));
+    }
+
+    // Cursor circle
+    this.sm.editGroup.add(makeCircle(cursor.x, cursor.y, 0.1, 0xffffff));
   }
 
   // ── Select / drag ─────────────────────────────────────────────────────────
@@ -481,12 +543,12 @@ export class FloorPlanEditor {
         }
       }
 
-      // Floor holes
+      // Floor holes — point-in-polygon test
       for (let hi = 0; hi < floor.floorHoles.length; hi++) {
         const hole = floor.floorHoles[hi];
-        if (pos.distanceTo(hole.position) < Math.max(hole.width, hole.depth) / 2 + FLOOR_HOLE_SELECTION_BUFFER_M) {
+        if (this._pointInPolygon(pos, hole.points)) {
           this._isDragging = true;
-          this._dragTarget = { type: 'floor-hole', holeIndex: hi };
+          this._dragTarget = { type: 'floor-hole', holeIndex: hi, lastPos: pos.clone() };
           this.selectedElement = hole;
           this.app.ui.showProperties(hole);
           return;
@@ -515,7 +577,157 @@ export class FloorPlanEditor {
     } else if (dt.type === 'stairs' && floor && floor.stairs) {
       floor.stairs.position.copy(pos);
     } else if (dt.type === 'floor-hole' && floor && floor.floorHoles[dt.holeIndex]) {
-      floor.floorHoles[dt.holeIndex].position.copy(pos);
+      const dx = pos.x - dt.lastPos.x;
+      const dy = pos.y - dt.lastPos.y;
+      floor.floorHoles[dt.holeIndex].translate(dx, dy);
+      dt.lastPos.copy(pos);
+    }
+    this.redraw();
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  /** Ray-casting point-in-polygon test (2D). */
+  _pointInPolygon(point, polygon) {
+    if (!polygon || polygon.length < 3) return false;
+    let inside = false;
+    const px = point.x, py = point.y;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i].x, yi = polygon[i].y;
+      const xj = polygon[j].x, yj = polygon[j].y;
+      const intersect = ((yi > py) !== (yj > py)) &&
+        (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  // ── Move tool ─────────────────────────────────────────────────────────────
+  _handleMoveDown(pos) {
+    const floor = this.currentFloor;
+    if (!floor) return;
+
+    // Elevator
+    if (floor.elevator) {
+      const ev = floor.elevator;
+      const hw = ev.width / 2 + 0.2, hd = ev.depth / 2 + 0.2;
+      if (Math.abs(pos.x - ev.position.x) <= hw && Math.abs(pos.y - ev.position.y) <= hd) {
+        this._isDragging = true;
+        this._dragTarget = { type: 'elevator', lastPos: pos.clone() };
+        this.selectedElement = ev;
+        this.app.ui.showProperties(ev);
+        return;
+      }
+    }
+
+    // Stairs (bounding box check using center)
+    if (floor.stairs) {
+      const st = floor.stairs;
+      const cx = st.position.x + st.width / 2;
+      const cz = st.position.y + st.runLength / 2;
+      if (Math.abs(pos.x - cx) <= st.width / 2 + 0.3 && Math.abs(pos.y - cz) <= st.runLength / 2 + 0.3) {
+        this._isDragging = true;
+        this._dragTarget = { type: 'stairs', lastPos: pos.clone() };
+        this.selectedElement = st;
+        this.app.ui.showProperties(st);
+        return;
+      }
+    }
+
+    // Floor holes
+    for (let hi = 0; hi < floor.floorHoles.length; hi++) {
+      const hole = floor.floorHoles[hi];
+      if (this._pointInPolygon(pos, hole.points)) {
+        this._isDragging = true;
+        this._dragTarget = { type: 'floor-hole', holeIndex: hi, lastPos: pos.clone() };
+        this.selectedElement = hole;
+        this.app.ui.showProperties(hole);
+        return;
+      }
+    }
+
+    // Windows
+    for (let wi = 0; wi < floor.windows.length; wi++) {
+      const win = floor.windows[wi];
+      const wp = this._getElementWorldPos(win);
+      if (wp && pos.distanceTo(wp) < 0.8) {
+        this._isDragging = true;
+        this._dragTarget = { type: 'window', elementIndex: wi };
+        this.selectedElement = win;
+        this.app.ui.showProperties(win);
+        return;
+      }
+    }
+
+    // Doors
+    for (let di = 0; di < floor.doors.length; di++) {
+      const door = floor.doors[di];
+      const dp = this._getElementWorldPos(door);
+      if (dp && pos.distanceTo(dp) < 0.8) {
+        this._isDragging = true;
+        this._dragTarget = { type: 'door', elementIndex: di };
+        this.selectedElement = door;
+        this.app.ui.showProperties(door);
+        return;
+      }
+    }
+
+    // Balconies
+    for (let bi = 0; bi < floor.balconies.length; bi++) {
+      const bal = floor.balconies[bi];
+      const bp = this._getElementWorldPos(bal);
+      if (bp && pos.distanceTo(bp) < 1.2) {
+        this._isDragging = true;
+        this._dragTarget = { type: 'balcony', elementIndex: bi };
+        this.selectedElement = bal;
+        this.app.ui.showProperties(bal);
+        return;
+      }
+    }
+  }
+
+  _handleMoveDragMove(pos) {
+    const dt = this._dragTarget;
+    const floor = this.currentFloor;
+    if (!floor || !dt) return;
+
+    if (dt.type === 'elevator' && floor.elevator) {
+      const dx = pos.x - dt.lastPos.x;
+      const dy = pos.y - dt.lastPos.y;
+      floor.elevator.position.x += dx;
+      floor.elevator.position.y += dy;
+      dt.lastPos.copy(pos);
+    } else if (dt.type === 'stairs' && floor.stairs) {
+      const dx = pos.x - dt.lastPos.x;
+      const dy = pos.y - dt.lastPos.y;
+      floor.stairs.position.x += dx;
+      floor.stairs.position.y += dy;
+      dt.lastPos.copy(pos);
+    } else if (dt.type === 'floor-hole' && floor.floorHoles[dt.holeIndex]) {
+      const dx = pos.x - dt.lastPos.x;
+      const dy = pos.y - dt.lastPos.y;
+      floor.floorHoles[dt.holeIndex].translate(dx, dy);
+      dt.lastPos.copy(pos);
+    } else if (dt.type === 'window' && floor.windows[dt.elementIndex]) {
+      const result = this._findNearestWallSegment(pos, 4.0);
+      if (result) {
+        const el = floor.windows[dt.elementIndex];
+        el.wallIndex = result.wallIndex;
+        el.offsetAlongWall = Math.max(0, result.offset - el.width / 2);
+      }
+    } else if (dt.type === 'door' && floor.doors[dt.elementIndex]) {
+      const result = this._findNearestWallSegment(pos, 4.0);
+      if (result) {
+        const el = floor.doors[dt.elementIndex];
+        el.wallIndex = result.wallIndex;
+        el.offsetAlongWall = Math.max(0, result.offset - el.width / 2);
+      }
+    } else if (dt.type === 'balcony' && floor.balconies[dt.elementIndex]) {
+      const result = this._findNearestWallSegment(pos, 4.0);
+      if (result) {
+        const el = floor.balconies[dt.elementIndex];
+        el.wallIndex = result.wallIndex;
+        el.offsetAlongWall = Math.max(0, result.offset - el.width / 2);
+      }
     }
     this.redraw();
   }
@@ -737,25 +949,28 @@ export class FloorPlanEditor {
       }
     }
 
-    // Floor holes
+    // Floor holes — polygon outline + filled
     for (const hole of floor.floorHoles) {
-      const hx = hole.position.x, hz = hole.position.y;
-      const hw = hole.width / 2, hd = hole.depth / 2;
-      // Dark background fill — a very dark tint distinguishes the void from the floor
-      const fill = makeFilledRect(hx, hz, hole.width, hole.depth, 0x220000, 0.02);
+      if (!hole.points || hole.points.length < 3) continue;
+      // Dark filled polygon
+      const fill = makeFilledContour(hole.points, 0x110000, 0.70);
+      fill.position.y = 0.02;
       this.sm.editGroup.add(fill);
-      const corners = [
-        new THREE.Vector2(hx - hw, hz - hd),
-        new THREE.Vector2(hx + hw, hz - hd),
-        new THREE.Vector2(hx + hw, hz + hd),
-        new THREE.Vector2(hx - hw, hz + hd),
-      ];
-      this.sm.editGroup.add(makeLineLoop(corners, 0xff4444));
-      // Diagonal X marks to indicate a void
-      this.sm.editGroup.add(makeLine([corners[0], corners[2]], 0xff4444));
-      this.sm.editGroup.add(makeLine([corners[1], corners[3]], 0xff4444));
+      // Red outline
+      this.sm.editGroup.add(makeLineLoop(hole.points, 0xff4444));
+      // Diagonal X through centroid to indicate a void
+      const c = hole.position;
+      const r = hole.radius * 0.5;
+      this.sm.editGroup.add(makeLine([
+        new THREE.Vector2(c.x - r, c.y - r),
+        new THREE.Vector2(c.x + r, c.y + r)
+      ], 0xff4444));
+      this.sm.editGroup.add(makeLine([
+        new THREE.Vector2(c.x + r, c.y - r),
+        new THREE.Vector2(c.x - r, c.y + r)
+      ], 0xff4444));
       if (this.selectedElement === hole) {
-        this.sm.editGroup.add(makeCircle(hx, hz, 0.2, 0x44aaff));
+        this.sm.editGroup.add(makeCircle(c.x, c.y, 0.2, 0x44aaff));
       }
     }
   }

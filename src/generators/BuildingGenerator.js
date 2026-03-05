@@ -75,19 +75,17 @@ export class BuildingGenerator {
     }
     shape.closePath();
 
-    // Cut floor holes (rectangular openings through the slab)
+    // Cut floor holes (polygon openings through the slab)
     if (floorHoles && floorHoles.length > 0) {
       for (const hole of floorHoles) {
-        const hx = hole.position.x;
-        const hz = hole.position.y;   // world Z
-        const hw = hole.width / 2;
-        const hd = hole.depth / 2;
+        if (!hole.points || hole.points.length < 3) continue;
+        const pts = hole.points;
         // In shape space: shape.y = -world_z
         const path = new THREE.Path();
-        path.moveTo(hx - hw, -hz - hd);
-        path.lineTo(hx + hw, -hz - hd);
-        path.lineTo(hx + hw, -hz + hd);
-        path.lineTo(hx - hw, -hz + hd);
+        path.moveTo(pts[0].x, -pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          path.lineTo(pts[i].x, -pts[i].y);
+        }
         path.closePath();
         shape.holes.push(path);
       }

@@ -70,6 +70,7 @@ export class UIManager {
   _bindTools() {
     const toolMap = {
       'select':         'select',
+      'move':           'move',
       'draw-contour':   'draw-contour',
       'draw-wall':      'draw-wall',
       'add-window':     'add-window',
@@ -81,7 +82,8 @@ export class UIManager {
     };
 
     const hintMap = {
-      'select':         'Click to select elements. Drag vertices to move.',
+      'select':         'Click to select elements. Drag vertices or elements to reposition.',
+      'move':           'Click and drag any element to move it. Wall elements snap to the nearest wall.',
       'draw-contour':   'Click to add points. Click near first point or double-click to close.',
       'draw-wall':      'Click to place wall start, click again for end.',
       'add-window':     'Click on an outer wall segment to add a window.',
@@ -89,7 +91,7 @@ export class UIManager {
       'add-balcony':    'Click on an outer wall segment to add a balcony.',
       'add-elevator':   'Click anywhere inside the building to place an elevator shaft.',
       'add-stairs':     'Click anywhere inside the building to place a staircase.',
-      'add-floor-hole': 'Click anywhere inside the building to place a floor opening.',
+      'add-floor-hole': 'Click to add polygon points. Click near the first point or double-click to close.',
     };
 
     document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
@@ -416,22 +418,25 @@ export class UIManager {
 
     } else if (element instanceof FloorHole) {
       container.innerHTML = `<div class="prop-type-badge">Floor Hole</div>`;
-      container.appendChild(this._makePropGroup([
-        { label: 'Width (m)', key: 'width', type: 'number', min: 0.3, step: 0.1 },
-        { label: 'Depth (m)', key: 'depth', type: 'number', min: 0.3, step: 0.1 },
-      ], element, () => app.editor.redraw()));
+      const info = document.createElement('p');
+      info.className = 'hint-text';
+      info.textContent = `Polygon with ${element.points.length} vertices`;
+      container.appendChild(info);
       container.appendChild(this._makeFloorCopySection(
         floor => floor.floorHoles.some(h =>
-          h.position.distanceTo(element.position) <= COPY_TOLERANCE_M),
+          h.points.length === element.points.length &&
+          h.points.every((p, i) => p.distanceTo(element.points[i]) <= COPY_TOLERANCE_M)),
         floor => {
           if (!floor.floorHoles.some(h =>
-              h.position.distanceTo(element.position) <= COPY_TOLERANCE_M)) {
-            floor.floorHoles.push(new FloorHole(element.position, element.width, element.depth));
+              h.points.length === element.points.length &&
+              h.points.every((p, i) => p.distanceTo(element.points[i]) <= COPY_TOLERANCE_M))) {
+            floor.floorHoles.push(new FloorHole(element.points));
           }
         },
         floor => {
           floor.floorHoles = floor.floorHoles.filter(h =>
-            !(h.position.distanceTo(element.position) <= COPY_TOLERANCE_M));
+            !(h.points.length === element.points.length &&
+              h.points.every((p, i) => p.distanceTo(element.points[i]) <= COPY_TOLERANCE_M)));
         }
       ));
       this._addDeleteButton(container, () => {
