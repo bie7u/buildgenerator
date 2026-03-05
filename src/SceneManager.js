@@ -79,11 +79,13 @@ export class SceneManager {
     if (mode === '3d') {
       this.scene.background = new THREE.Color(0x1a1a2e);
       this.orbitControls.enabled = true;
+      this.buildingGroup.visible = true;
       this.editGroup.visible = false;
       this.gridGroup.visible = false;
     } else {
       this.scene.background = new THREE.Color(0x2c2c2c);
       this.orbitControls.enabled = false;
+      this.buildingGroup.visible = false;
       this.editGroup.visible = true;
       this.gridGroup.visible = true;
     }
