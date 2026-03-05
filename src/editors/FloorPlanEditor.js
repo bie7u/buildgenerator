@@ -64,6 +64,8 @@ const FLOOR_HOLE_SELECTION_BUFFER_M = 0.3;
  * Renders the floor contour as a semi-transparent filled shape (ghost fill).
  * The contour is in XZ world space (Vector2.y = world Z), so we negate .y
  * before passing to ShapeGeometry and then rotateX(-PI/2) to land in XZ.
+ * Rendered above element fills (y=0.03 > element yOff=0.02) with renderOrder=1
+ * so the tint is always visible even over stairs/elevator rectangles.
  */
 function makeFilledContour(contour, color, opacity) {
   const shape = new THREE.Shape();
@@ -77,8 +79,9 @@ function makeFilledContour(contour, color, opacity) {
     color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
   });
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 1;
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.y = 0.005;
+  mesh.position.y = 0.03;
   return mesh;
 }
 
@@ -611,7 +614,7 @@ export class FloorPlanEditor {
 
     // Ghost fill — semi-transparent floor area overlay
     if (this.ghostFill && c.length >= 3) {
-      const fill = makeFilledContour(c, 0xaaccff, 0.07);
+      const fill = makeFilledContour(c, 0xaaccff, 0.18);
       this.sm.editGroup.add(fill);
     }
 
