@@ -4,6 +4,7 @@ import { Door } from './Door.js';
 import { Balcony } from './Balcony.js';
 import { Elevator } from './Elevator.js';
 import { Stairs } from './Stairs.js';
+import { FloorHole } from './FloorHole.js';
 
 export class Floor {
   constructor(index, height = 2.7) {
@@ -15,6 +16,7 @@ export class Floor {
     this.balconies = [];       // Balcony[]
     this.elevator = null;      // Elevator | null
     this.stairs = null;        // Stairs | null
+    this.floorHoles = [];      // FloorHole[]
   }
 
   toJSON() {
@@ -27,6 +29,7 @@ export class Floor {
       balconies: this.balconies.map(b => b.toJSON()),
       elevator: this.elevator ? this.elevator.toJSON() : null,
       stairs: this.stairs ? this.stairs.toJSON() : null,
+      floorHoles: this.floorHoles.map(h => h.toJSON()),
     };
   }
 
@@ -38,6 +41,7 @@ export class Floor {
     f.balconies = (data.balconies || []).map(b => Balcony.fromJSON(b));
     f.elevator = data.elevator ? Elevator.fromJSON(data.elevator) : null;
     f.stairs = data.stairs ? Stairs.fromJSON(data.stairs) : null;
+    f.floorHoles = (data.floorHoles || []).map(h => FloorHole.fromJSON(h));
     return f;
   }
 }

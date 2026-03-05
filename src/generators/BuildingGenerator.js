@@ -40,8 +40,8 @@ export class BuildingGenerator {
     }
     const totalHeight = baseY;
 
-    // Ground floor slab (bottom of building)
-    this._addSlab(building, 0, group);
+    // Ground floor slab (bottom of building) — no floor holes
+    this._addSlab(building, 0, null, group);
 
     for (let fi = 0; fi < building.floors.length; fi++) {
       const floor = building.floors[fi];
@@ -54,13 +54,13 @@ export class BuildingGenerator {
       this._generateElevator(floor, floorBaseY, group);
       this._generateStairs(floor, floorBaseY, group);
 
-      // Ceiling slab
-      this._addSlab(building, floorBaseY + floor.height, group);
+      // Ceiling slab — cut holes defined on this floor
+      this._addSlab(building, floorBaseY + floor.height, floor.floorHoles, group);
     }
   }
 
   // ── Floor slabs ───────────────────────────────────────────────────────────
-  _addSlab(building, yTop, group) {
+  _addSlab(building, yTop, floorHoles, group) {
     const contour = building.contour;
     if (contour.length < 3) return;
 
@@ -74,6 +74,24 @@ export class BuildingGenerator {
       shape.lineTo(contour[i].x, -contour[i].y);
     }
     shape.closePath();
+
+    // Cut floor holes (rectangular openings through the slab)
+    if (floorHoles && floorHoles.length > 0) {
+      for (const hole of floorHoles) {
+        const hx = hole.position.x;
+        const hz = hole.position.y;   // world Z
+        const hw = hole.width / 2;
+        const hd = hole.depth / 2;
+        // In shape space: shape.y = -world_z
+        const path = new THREE.Path();
+        path.moveTo(hx - hw, -hz - hd);
+        path.lineTo(hx + hw, -hz - hd);
+        path.lineTo(hx + hw, -hz + hd);
+        path.lineTo(hx - hw, -hz + hd);
+        path.closePath();
+        shape.holes.push(path);
+      }
+    }
 
     const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.15, bevelEnabled: false });
     geo.rotateX(-Math.PI / 2);

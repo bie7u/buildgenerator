@@ -4,6 +4,7 @@ import { Balcony } from '../models/Balcony.js';
 import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { Wall } from '../models/Wall.js';
+import { FloorHole } from '../models/FloorHole.js';
 
 // Max position difference (metres) used when matching an element on another
 // floor as a copy of the currently-selected element.
@@ -68,25 +69,27 @@ export class UIManager {
   // ── Tool buttons ──────────────────────────────────────────────────────────
   _bindTools() {
     const toolMap = {
-      'select':       'select',
-      'draw-contour': 'draw-contour',
-      'draw-wall':    'draw-wall',
-      'add-window':   'add-window',
-      'add-door':     'add-door',
-      'add-balcony':  'add-balcony',
-      'add-elevator': 'add-elevator',
-      'add-stairs':   'add-stairs',
+      'select':         'select',
+      'draw-contour':   'draw-contour',
+      'draw-wall':      'draw-wall',
+      'add-window':     'add-window',
+      'add-door':       'add-door',
+      'add-balcony':    'add-balcony',
+      'add-elevator':   'add-elevator',
+      'add-stairs':     'add-stairs',
+      'add-floor-hole': 'add-floor-hole',
     };
 
     const hintMap = {
-      'select':       'Click to select elements. Drag vertices to move.',
-      'draw-contour': 'Click to add points. Click near first point or double-click to close.',
-      'draw-wall':    'Click to place wall start, click again for end.',
-      'add-window':   'Click on an outer wall segment to add a window.',
-      'add-door':     'Click on an outer wall segment to add a door.',
-      'add-balcony':  'Click on an outer wall segment to add a balcony.',
-      'add-elevator': 'Click anywhere inside the building to place an elevator shaft.',
-      'add-stairs':   'Click anywhere inside the building to place a staircase.',
+      'select':         'Click to select elements. Drag vertices to move.',
+      'draw-contour':   'Click to add points. Click near first point or double-click to close.',
+      'draw-wall':      'Click to place wall start, click again for end.',
+      'add-window':     'Click on an outer wall segment to add a window.',
+      'add-door':       'Click on an outer wall segment to add a door.',
+      'add-balcony':    'Click on an outer wall segment to add a balcony.',
+      'add-elevator':   'Click anywhere inside the building to place an elevator shaft.',
+      'add-stairs':     'Click anywhere inside the building to place a staircase.',
+      'add-floor-hole': 'Click anywhere inside the building to place a floor opening.',
     };
 
     document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
@@ -123,6 +126,11 @@ export class UIManager {
       app.grid.setVisible(e.target.checked);
     });
 
+    document.getElementById('ghost-fill').addEventListener('change', e => {
+      app.editor.ghostFill = e.target.checked;
+      app.editor.redraw();
+    });
+
     document.getElementById('independent-floors').addEventListener('change', e => {
       // Independent floor mode: future feature hook
     });
@@ -141,6 +149,7 @@ export class UIManager {
         floor.balconies = [];
         floor.elevator = null;
         floor.stairs = null;
+        floor.floorHoles = [];
         app.editor.selectedElement = null;
         this.clearProperties();
         app.editor.redraw();
@@ -163,6 +172,7 @@ export class UIManager {
         floor.balconies = [];
         floor.elevator = null;
         floor.stairs = null;
+        floor.floorHoles = [];
       }
       app.editor.selectedElement = null;
       this.clearProperties();
@@ -398,6 +408,35 @@ export class UIManager {
       this._addDeleteButton(container, () => {
         const floor = app.building.getFloor(app.currentFloorIndex);
         if (floor) floor.internalWalls = floor.internalWalls.filter(e => e !== element);
+        app.editor.selectedElement = null;
+        this.clearProperties();
+        app.editor.redraw();
+        this.updateBuildingInfo();
+      });
+
+    } else if (element instanceof FloorHole) {
+      container.innerHTML = `<div class="prop-type-badge">Floor Hole</div>`;
+      container.appendChild(this._makePropGroup([
+        { label: 'Width (m)', key: 'width', type: 'number', min: 0.3, step: 0.1 },
+        { label: 'Depth (m)', key: 'depth', type: 'number', min: 0.3, step: 0.1 },
+      ], element, () => app.editor.redraw()));
+      container.appendChild(this._makeFloorCopySection(
+        floor => floor.floorHoles.some(h =>
+          h.position.distanceTo(element.position) <= COPY_TOLERANCE_M),
+        floor => {
+          if (!floor.floorHoles.some(h =>
+              h.position.distanceTo(element.position) <= COPY_TOLERANCE_M)) {
+            floor.floorHoles.push(new FloorHole(element.position, element.width, element.depth));
+          }
+        },
+        floor => {
+          floor.floorHoles = floor.floorHoles.filter(h =>
+            !(h.position.distanceTo(element.position) <= COPY_TOLERANCE_M));
+        }
+      ));
+      this._addDeleteButton(container, () => {
+        const floor = app.building.getFloor(app.currentFloorIndex);
+        if (floor) floor.floorHoles = floor.floorHoles.filter(e => e !== element);
         app.editor.selectedElement = null;
         this.clearProperties();
         app.editor.redraw();

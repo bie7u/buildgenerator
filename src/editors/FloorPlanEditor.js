@@ -6,6 +6,7 @@ import { Door } from '../models/Door.js';
 import { Balcony } from '../models/Balcony.js';
 import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
+import { FloorHole } from '../models/FloorHole.js';
 
 // ─── 2D line/shape helpers ─────────────────────────────────────────────────
 function makeLine(pts, color, linewidth = 1) {
@@ -55,6 +56,31 @@ function makeFilledRect(cx, cz, w, d, color, yOff = 0.01) {
 // ──────────────────────────────────────────────────────────────────────────
 // Radius (metres) within which a mouse click is treated as "on" a vertex
 const SNAP_THRESHOLD = 0.5;
+// Extra click tolerance (metres) added to half the floor-hole's size when
+// detecting whether a click lands inside the hole's bounding box.
+const FLOOR_HOLE_SELECTION_BUFFER_M = 0.3;
+
+/**
+ * Renders the floor contour as a semi-transparent filled shape (ghost fill).
+ * The contour is in XZ world space (Vector2.y = world Z), so we negate .y
+ * before passing to ShapeGeometry and then rotateX(-PI/2) to land in XZ.
+ */
+function makeFilledContour(contour, color, opacity) {
+  const shape = new THREE.Shape();
+  shape.moveTo(contour[0].x, -contour[0].y);
+  for (let i = 1; i < contour.length; i++) {
+    shape.lineTo(contour[i].x, -contour[i].y);
+  }
+  shape.closePath();
+  const geo = new THREE.ShapeGeometry(shape);
+  const mat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.005;
+  return mesh;
+}
 
 export class FloorPlanEditor {
   constructor(sceneManager, building, app) {
@@ -65,6 +91,9 @@ export class FloorPlanEditor {
     this.tool = 'select';
     this.currentFloorIndex = 0;
     this.selectedElement = null;
+
+    // Ghost fill — semi-transparent floor contour overlay (helps placing elements)
+    this.ghostFill = true;
 
     // Draw-contour state
     this._isDrawingContour = false;
@@ -146,6 +175,7 @@ export class FloorPlanEditor {
       case 'add-balcony':    this._handleAddOpeningDown(pos, 'balcony'); break;
       case 'add-elevator':   this._handleAddElevatorDown(pos); break;
       case 'add-stairs':     this._handleAddStairsDown(pos); break;
+      case 'add-floor-hole': this._handleAddFloorHoleDown(pos); break;
     }
   }
 
@@ -348,6 +378,18 @@ export class FloorPlanEditor {
     this.redraw();
   }
 
+  // ── Add floor hole ────────────────────────────────────────────────────────
+  _handleAddFloorHoleDown(pos) {
+    const floor = this.currentFloor;
+    if (!floor) return;
+    const hole = new FloorHole(pos, 1.0, 1.0);
+    floor.floorHoles.push(hole);
+    this.selectedElement = hole;
+    this.app.ui.showProperties(hole);
+    this.app.ui.updateBuildingInfo();
+    this.redraw();
+  }
+
   // ── Select / drag ─────────────────────────────────────────────────────────
   _handleSelectDown(pos, e) {
     // Try contour vertices first
@@ -435,6 +477,18 @@ export class FloorPlanEditor {
           return;
         }
       }
+
+      // Floor holes
+      for (let hi = 0; hi < floor.floorHoles.length; hi++) {
+        const hole = floor.floorHoles[hi];
+        if (pos.distanceTo(hole.position) < Math.max(hole.width, hole.depth) / 2 + FLOOR_HOLE_SELECTION_BUFFER_M) {
+          this._isDragging = true;
+          this._dragTarget = { type: 'floor-hole', holeIndex: hi };
+          this.selectedElement = hole;
+          this.app.ui.showProperties(hole);
+          return;
+        }
+      }
     }
 
     // Nothing found → deselect
@@ -457,6 +511,8 @@ export class FloorPlanEditor {
       floor.elevator.position.copy(pos);
     } else if (dt.type === 'stairs' && floor && floor.stairs) {
       floor.stairs.position.copy(pos);
+    } else if (dt.type === 'floor-hole' && floor && floor.floorHoles[dt.holeIndex]) {
+      floor.floorHoles[dt.holeIndex].position.copy(pos);
     }
     this.redraw();
   }
@@ -552,6 +608,12 @@ export class FloorPlanEditor {
   _drawContourAndVertices() {
     const c = this.building.contour;
     if (c.length === 0) return;
+
+    // Ghost fill — semi-transparent floor area overlay
+    if (this.ghostFill && c.length >= 3) {
+      const fill = makeFilledContour(c, 0xaaccff, 0.07);
+      this.sm.editGroup.add(fill);
+    }
 
     // Contour lines
     if (c.length >= 2) {
@@ -669,6 +731,28 @@ export class FloorPlanEditor {
           new THREE.Vector2(px, pz + t),
           new THREE.Vector2(px + st.width, pz + t)
         ], 0xffaa66));
+      }
+    }
+
+    // Floor holes
+    for (const hole of floor.floorHoles) {
+      const hx = hole.position.x, hz = hole.position.y;
+      const hw = hole.width / 2, hd = hole.depth / 2;
+      // Dark background fill — a very dark tint distinguishes the void from the floor
+      const fill = makeFilledRect(hx, hz, hole.width, hole.depth, 0x220000, 0.02);
+      this.sm.editGroup.add(fill);
+      const corners = [
+        new THREE.Vector2(hx - hw, hz - hd),
+        new THREE.Vector2(hx + hw, hz - hd),
+        new THREE.Vector2(hx + hw, hz + hd),
+        new THREE.Vector2(hx - hw, hz + hd),
+      ];
+      this.sm.editGroup.add(makeLineLoop(corners, 0xff4444));
+      // Diagonal X marks to indicate a void
+      this.sm.editGroup.add(makeLine([corners[0], corners[2]], 0xff4444));
+      this.sm.editGroup.add(makeLine([corners[1], corners[3]], 0xff4444));
+      if (this.selectedElement === hole) {
+        this.sm.editGroup.add(makeCircle(hx, hz, 0.2, 0x44aaff));
       }
     }
   }
