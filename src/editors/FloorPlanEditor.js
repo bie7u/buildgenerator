@@ -59,6 +59,14 @@ function makeFilledRect(cx, cz, w, d, color, yOff = 0.01) {
 const SNAP_THRESHOLD = 0.5;
 // Maximum interior angle allowed when editing via the dim-edit popup
 const MAX_ANGLE_DEG  = 359.9;
+// Distance (metres) above the contour centroid where the rotation handle sits
+const ROTATION_HANDLE_OFFSET = 2.5;
+// Angle (degrees) within which cursor direction snaps to a cardinal/perpendicular
+const ANGLE_SNAP_THRESHOLD_DEG = 10;
+// Size of the right-angle square indicator drawn at the snap vertex (metres)
+const RIGHT_ANGLE_BOX_SIZE = 0.25;
+// The rotation handle has a slightly larger hit area than a regular vertex
+const ROTATION_HANDLE_HIT_MULTIPLIER = 1.5;
 
 /**
  * Renders the floor contour as a semi-transparent filled shape (ghost fill).
@@ -100,6 +108,9 @@ export class FloorPlanEditor {
     // Draw-contour state
     this._isDrawingContour = false;
     this._previewPoints = [];
+
+    // 90° angle snap state (used during draw-contour)
+    this._angleSnapActive = false;
 
     // Draw-wall state
     this._isDrawingWall = false;
@@ -153,6 +164,7 @@ export class FloorPlanEditor {
   resetState() {
     this._isDrawingContour = false;
     this._previewPoints = [];
+    this._angleSnapActive = false;
     this._isDrawingFloorHole = false;
     this._floorHolePoints = [];
     this._isDrawingWall = false;
@@ -169,6 +181,7 @@ export class FloorPlanEditor {
     this.tool = tool;
     this._isDrawingContour = false;
     this._previewPoints = [];
+    this._angleSnapActive = false;
     this._isDrawingFloorHole = false;
     this._floorHolePoints = [];
     this._isDrawingWall = false;
@@ -224,7 +237,13 @@ export class FloorPlanEditor {
     // Close any open dim-edit popup on canvas click
     this._hideDimEdit();
 
-    const pos = this._snapToGrid(this.sm.getWorldPosition(e));
+    const rawPos = this.sm.getWorldPosition(e);
+    let pos = this._snapToGrid(rawPos);
+
+    // Apply 90° angle snap when drawing contour
+    if (this.tool === 'draw-contour' && this._previewPoints.length > 0) {
+      pos = this._applyAngleSnap(pos);
+    }
 
     if (e.button === 2 || e.button === 1) {
       // Right/middle drag = pan
@@ -254,7 +273,14 @@ export class FloorPlanEditor {
 
     const rawPos = this.sm.getWorldPosition(e);
     this._cursorPos.copy(rawPos);
-    const pos = this._snapToGrid(rawPos);
+    let pos = this._snapToGrid(rawPos);
+
+    // Apply 90° angle snap when drawing contour
+    if (this.tool === 'draw-contour' && this._previewPoints.length > 0) {
+      pos = this._applyAngleSnap(pos);
+    } else {
+      this._angleSnapActive = false;
+    }
     this._snappedCursorPos.copy(pos);
 
     // Update status bar
@@ -362,9 +388,31 @@ export class FloorPlanEditor {
       this.sm.editGroup.add(line);
     }
 
-    // Preview to cursor
-    const dash = makeDashedLine([pts[pts.length - 1], cursor], 0xffffff);
+    // Preview to cursor — use cyan when angle-snapped, white otherwise
+    const dashColor = this._angleSnapActive ? 0x00ddff : 0xffffff;
+    const dash = makeDashedLine([pts[pts.length - 1], cursor], dashColor);
     this.sm.editGroup.add(dash);
+
+    // 90° snap indicator: small square at the last vertex when snapping
+    if (this._angleSnapActive && pts.length >= 2) {
+      const last = pts[pts.length - 1];
+      const prev = pts[pts.length - 2];
+      // Draw a small square in the corner direction
+      const d1x = prev.x - last.x, d1y = prev.y - last.y;
+      const d1l = Math.sqrt(d1x * d1x + d1y * d1y) || 1;
+      const d2x = cursor.x - last.x, d2y = cursor.y - last.y;
+      const d2l = Math.sqrt(d2x * d2x + d2y * d2y) || 1;
+      const boxSize = RIGHT_ANGLE_BOX_SIZE;
+      const n1 = { x: d1x / d1l * boxSize, y: d1y / d1l * boxSize };
+      const n2 = { x: d2x / d2l * boxSize, y: d2y / d2l * boxSize };
+      const boxPts = [
+        new THREE.Vector2(last.x + n1.x, last.y + n1.y),
+        new THREE.Vector2(last.x + n1.x + n2.x, last.y + n1.y + n2.y),
+        new THREE.Vector2(last.x + n2.x, last.y + n2.y),
+      ];
+      const boxLine = makeLine(boxPts, 0x00ddff);
+      this.sm.editGroup.add(boxLine);
+    }
 
     // Close hint circle at first point
     const fc = makeCircle(pts[0].x, pts[0].y, 0.3, 0x44ff88);
@@ -377,7 +425,7 @@ export class FloorPlanEditor {
     }
 
     // Cursor circle
-    const cc = makeCircle(cursor.x, cursor.y, 0.1, 0xffffff);
+    const cc = makeCircle(cursor.x, cursor.y, 0.1, this._angleSnapActive ? 0x00ddff : 0xffffff);
     this.sm.editGroup.add(cc);
   }
 
@@ -527,6 +575,23 @@ export class FloorPlanEditor {
 
   // ── Select / drag ─────────────────────────────────────────────────────────
   _handleSelectDown(pos, e) {
+    const contour = this.activeContour;
+
+    // Check rotation handle first (before vertex check so small contours still work)
+    if (contour.length >= 3) {
+      const rh = this._getRotationHandlePos(contour);
+      if (rh && pos.distanceTo(rh) < SNAP_THRESHOLD * ROTATION_HANDLE_HIT_MULTIPLIER) {
+        const cent = this._getContourCentroid(contour);
+        this._isDragging = true;
+        this._dragTarget = {
+          type: 'contour-rotate',
+          centroid: cent.clone(),
+          lastAngle: Math.atan2(pos.y - cent.y, pos.x - cent.x),
+        };
+        return;
+      }
+    }
+
     // Try contour vertices first
     const vIdx = this._findNearestContourVertex(pos, SNAP_THRESHOLD);
     if (vIdx !== -1) {
@@ -626,6 +691,18 @@ export class FloorPlanEditor {
       }
     }
 
+    // Click inside contour body → grab whole contour
+    if (contour.length >= 3 && this._pointInPolygon(pos, contour)) {
+      // Auto-create per-floor override for floors > 0
+      if (this.currentFloorIndex > 0 && floor && !floor.contour) {
+        floor.contour = this.building.contour.map(p => p.clone());
+        Building._normalizePoints(floor.contour);
+      }
+      this._isDragging = true;
+      this._dragTarget = { type: 'contour-body', lastPos: pos.clone() };
+      return;
+    }
+
     // Nothing found → deselect
     this.selectedElement = null;
     this.app.ui.clearProperties();
@@ -644,6 +721,26 @@ export class FloorPlanEditor {
         Building._normalizePoints(floor.contour);
       }
       this.activeContour[dt.index].copy(pos);
+    } else if (dt.type === 'contour-body') {
+      // Translate the entire contour as a rigid body
+      const dx = pos.x - dt.lastPos.x;
+      const dy = pos.y - dt.lastPos.y;
+      const c = this.activeContour;
+      for (const v of c) { v.x += dx; v.y += dy; }
+      dt.lastPos.copy(pos);
+    } else if (dt.type === 'contour-rotate') {
+      // Rotate all contour vertices around the centroid
+      const c = this.activeContour;
+      const newAngle = Math.atan2(pos.y - dt.centroid.y, pos.x - dt.centroid.x);
+      const delta = newAngle - dt.lastAngle;
+      const cosD = Math.cos(delta), sinD = Math.sin(delta);
+      for (const v of c) {
+        const rx = v.x - dt.centroid.x;
+        const rz = v.y - dt.centroid.y;
+        v.x = dt.centroid.x + rx * cosD - rz * sinD;
+        v.y = dt.centroid.y + rx * sinD + rz * cosD;
+      }
+      dt.lastAngle = newAngle;
     } else if (dt.type === 'wall-start' && floor) {
       floor.internalWalls[dt.wallIndex].start.copy(pos);
     } else if (dt.type === 'wall-end' && floor) {
@@ -811,6 +908,80 @@ export class FloorPlanEditor {
   // ── Helpers ───────────────────────────────────────────────────────────────
   _snapToGrid(v) {
     return GridSystem.snap(v);
+  }
+
+  /**
+   * Compute centroid of a contour (array of Vector2).
+   */
+  _getContourCentroid(c) {
+    const cx = c.reduce((s, p) => s + p.x, 0) / c.length;
+    const cy = c.reduce((s, p) => s + p.y, 0) / c.length;
+    return new THREE.Vector2(cx, cy);
+  }
+
+  /**
+   * Position of the rotation handle: 2.5 m above the centroid.
+   */
+  _getRotationHandlePos(c) {
+    if (!c || c.length < 3) return null;
+    const cent = this._getContourCentroid(c);
+    return new THREE.Vector2(cent.x, cent.y - ROTATION_HANDLE_OFFSET);
+  }
+
+  /**
+   * Apply 90° angle snap to `gridPos` during contour drawing.
+   * Snaps to multiples of 90° from the previous edge direction (or to
+   * horizontal/vertical for the first segment). Threshold: ±10°.
+   * Side-effect: sets `this._angleSnapActive`.
+   */
+  _applyAngleSnap(gridPos) {
+    const THRESH_RAD = ANGLE_SNAP_THRESHOLD_DEG * Math.PI / 180;
+    const pts = this._previewPoints;
+    if (pts.length === 0) { this._angleSnapActive = false; return gridPos; }
+
+    const last = pts[pts.length - 1];
+    const toPos = new THREE.Vector2().subVectors(gridPos, last);
+    const toPosLen = toPos.length();
+    if (toPosLen < 0.01) { this._angleSnapActive = false; return gridPos; }
+    const toN = toPos.clone().divideScalar(toPosLen);
+
+    // Candidate snap directions
+    let snapDirs;
+    if (pts.length >= 2) {
+      const prev = pts[pts.length - 2];
+      const prevDx = last.x - prev.x, prevDy = last.y - prev.y;
+      const prevLen = Math.sqrt(prevDx * prevDx + prevDy * prevDy);
+      if (prevLen < 0.001) { this._angleSnapActive = false; return gridPos; }
+      const px = prevDx / prevLen, py = prevDy / prevLen;
+      snapDirs = [
+        new THREE.Vector2( px,  py),   // 0°  (continue)
+        new THREE.Vector2(-py,  px),   // 90° CCW
+        new THREE.Vector2(-px, -py),   // 180°
+        new THREE.Vector2( py, -px),   // 90° CW
+      ];
+    } else {
+      // First segment: horizontal / vertical
+      snapDirs = [
+        new THREE.Vector2(1, 0), new THREE.Vector2(-1, 0),
+        new THREE.Vector2(0, 1), new THREE.Vector2(0, -1),
+      ];
+    }
+
+    let bestDir = null, bestDot = Math.cos(THRESH_RAD);
+    for (const dir of snapDirs) {
+      const dot = toN.dot(dir);
+      if (dot > bestDot) { bestDot = dot; bestDir = dir; }
+    }
+
+    if (bestDir) {
+      this._angleSnapActive = true;
+      return new THREE.Vector2(
+        last.x + bestDir.x * toPosLen,
+        last.y + bestDir.y * toPosLen,
+      );
+    }
+    this._angleSnapActive = false;
+    return gridPos;
   }
 
   _findNearestContourVertex(pos, radius) {
@@ -1023,8 +1194,10 @@ export class FloorPlanEditor {
         const angle = this._interiorAngleDeg(prev, curr, cursor);
         const sc    = this._worldToScreen(curr.x, curr.y);
         const lbl   = document.createElement('div');
-        lbl.className = 'dim-label-angle dim-preview';
-        lbl.textContent = angle.toFixed(1) + '°';
+        // Highlight in cyan when 90° snap is active
+        const is90  = this._angleSnapActive;
+        lbl.className = 'dim-label-angle dim-preview' + (is90 ? ' snap-highlight' : '');
+        lbl.textContent = (is90 ? '⊾ ' : '') + angle.toFixed(1) + '°';
         lbl.style.left = (sc.x + 10) + 'px';
         lbl.style.top  = (sc.y - 10) + 'px';
         container.appendChild(lbl);
@@ -1084,19 +1257,43 @@ export class FloorPlanEditor {
   }
 
   /**
-   * Move the endpoint of segment `segIndex` so the segment length equals `newLen`.
-   * Direction is preserved; only the far endpoint (index+1) moves.
+   * Resize segment `segIndex` to `newLen` metres by translating ALL subsequent
+   * vertices as a rigid body (preserving every other segment's length and angle).
+   *
+   * Anchor: vertex `segIndex` stays fixed.
+   * Translated: vertex (segIndex+1) moves to the new position; vertices
+   *   (segIndex+2)…(n-1) shift by the same delta, wrapping around so that
+   *   for the last segment (points to vertex 0), vertices 0…(n-2) shift instead.
    */
   _applySegmentLengthEdit(contour, segIndex, newLen) {
     if (!contour || newLen < 0.01) return;
     const n = contour.length;
     const p1 = contour[segIndex];
-    const p2 = contour[(segIndex + 1) % n];
+    const farIdx = (segIndex + 1) % n;
+    const p2 = contour[farIdx];
     const dx = p2.x - p1.x, dz = p2.y - p1.y;
     const len = Math.sqrt(dx * dx + dz * dz);
     if (len < 0.001) return;
-    const scale = newLen / len;
-    contour[(segIndex + 1) % n].set(p1.x + dx * scale, p1.y + dz * scale);
+
+    const scale  = newLen / len;
+    const newP2x = p1.x + dx * scale;
+    const newP2z = p1.y + dz * scale;
+    const deltaX = newP2x - p2.x;
+    const deltaZ = newP2z - p2.y;
+
+    if (farIdx === 0) {
+      // Last segment (n-1 → 0): translate vertices 0 … n-2
+      for (let i = 0; i < n - 1; i++) {
+        contour[i].x += deltaX;
+        contour[i].y += deltaZ;
+      }
+    } else {
+      // General case: translate vertices segIndex+1 … n-1
+      for (let i = segIndex + 1; i < n; i++) {
+        contour[i].x += deltaX;
+        contour[i].y += deltaZ;
+      }
+    }
   }
 
   /**
@@ -1222,6 +1419,37 @@ export class FloorPlanEditor {
         ];
         const tick = makeLine(tickPts, hasFloorOverride ? 0x448844 : 0x888844);
         this.sm.editGroup.add(tick);
+      }
+    }
+
+    // ── Rotation handle ────────────────────────────────────────────────────
+    // Only shown in Select mode with a complete contour
+    if (n >= 3 && this.tool === 'select') {
+      const rh = this._getRotationHandlePos(c);
+      const cent = this._getContourCentroid(c);
+      if (rh) {
+        const isRotating = this._isDragging && this._dragTarget?.type === 'contour-rotate';
+        const rhColor = isRotating ? 0xffffff : 0x00ddff;
+        // Line from centroid to handle
+        this.sm.editGroup.add(makeDashedLine([cent, rh], 0x00aacc));
+        // Handle circle
+        this.sm.editGroup.add(makeCircle(rh.x, rh.y, 0.22, rhColor));
+        // Two small semicircular arcs that suggest rotation (arrow arcs)
+        const ARC_R        = 0.35;  // arc radius (metres)
+        const ARC_SEGMENTS = 8;     // polyline segments per arc
+        const ARC_SWEEP    = 1.4;   // arc sweep angle (radians, ≈80°)
+        const ARC_START    = -0.4;  // start offset (centres the arc around 0 / π)
+        const arcPts1 = [], arcPts2 = [];
+        for (let i = 0; i <= ARC_SEGMENTS; i++) {
+          const a = ARC_START + i / ARC_SEGMENTS * ARC_SWEEP;
+          arcPts1.push(new THREE.Vector2(rh.x + Math.cos(a) * ARC_R, rh.y + Math.sin(a) * ARC_R));
+        }
+        for (let i = 0; i <= ARC_SEGMENTS; i++) {
+          const a = Math.PI + ARC_START + i / ARC_SEGMENTS * ARC_SWEEP;
+          arcPts2.push(new THREE.Vector2(rh.x + Math.cos(a) * ARC_R, rh.y + Math.sin(a) * ARC_R));
+        }
+        this.sm.editGroup.add(makeLine(arcPts1, rhColor));
+        this.sm.editGroup.add(makeLine(arcPts2, rhColor));
       }
     }
   }

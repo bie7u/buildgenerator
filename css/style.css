@@ -341,6 +341,13 @@ html, body {
   pointer-events: none;
 }
 
+.dim-label-angle.snap-highlight {
+  color: #00ddff;
+  border-color: #00ddff;
+  opacity: 0.95;
+  font-weight: bold;
+}
+
 #dim-edit-popup {
   position: absolute;
   display: none;
