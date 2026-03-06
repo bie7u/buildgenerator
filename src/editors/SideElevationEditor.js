@@ -17,6 +17,9 @@ const SNAP_TO_END_THRESHOLD = 0.05;
 /** Arrow buttons */
 const ARROW_LEFT  = '\u25c4';
 const ARROW_RIGHT = '\u25ba';
+
+/**
+ * Side Elevation Editor
  *
  * 2D canvas view for one external wall segment, showing ALL wall bevels.
  * Supports multiple independent bevels per wall (e.g., one from each side).
