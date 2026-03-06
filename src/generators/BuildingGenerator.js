@@ -4,6 +4,10 @@ import * as THREE from 'three';
 const MAX_TREAD_DEPTH_M = 0.30;   // maximum depth of a single stair tread
 const RISER_HEIGHT_M    = 0.17;   // nominal riser height used to compute step count
 
+// Wall geometry constants
+const MIN_WALL_HEIGHT           = 0.01;  // minimum allowed wall/bevel height (metres)
+const OPENING_BOUNDARY_TOLERANCE = 0.05; // min clearance between an opening edge and wall end
+
 export class BuildingGenerator {
   constructor(sceneManager) {
     this.sm = sceneManager;
@@ -129,16 +133,22 @@ export class BuildingGenerator {
       const ndx = dx / wallLen;
       const ndz = dz / wallLen;
 
-      // Outer shape: width=wallLen, height=floorH in local XY
+      // Determine top heights (may be bevelled)
+      const bevel = floor.wallBevels.find(b => b.wallIndex === i);
+      const hStart = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightStart) : floorH;
+      const hEnd   = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightEnd)   : floorH;
+
+      // Build wall shape in local XY (X = along wall, Y = up)
       const shape = new THREE.Shape();
       shape.moveTo(0, 0);
       shape.lineTo(wallLen, 0);
-      shape.lineTo(wallLen, floorH);
-      shape.lineTo(0, floorH);
+      shape.lineTo(wallLen, hEnd);
+      shape.lineTo(0, hStart);
       shape.closePath();
 
       // Collect holes from windows and doors on this wall segment
-      const holes = this._getWallHoles(floor, i, floorH, wallLen);
+      // (clamp holes to whichever height applies at that x position)
+      const holes = this._getWallHolesForBevel(floor, i, hStart, hEnd, wallLen);
       shape.holes = holes;
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
@@ -164,8 +174,11 @@ export class BuildingGenerator {
     }
   }
 
-  _getWallHoles(floor, wallIndex, floorH, wallLen) {
+  /** Get wall opening holes, clamped to the local bevel height at each x position. */
+  _getWallHolesForBevel(floor, wallIndex, hStart, hEnd, wallLen) {
     const holes = [];
+
+    const maxYAtX = (x) => hStart + (hEnd - hStart) * (x / wallLen);
 
     for (const win of floor.windows) {
       if (win.wallIndex !== wallIndex) continue;
@@ -173,8 +186,9 @@ export class BuildingGenerator {
       const x1 = x0 + win.width;
       const y0 = win.sillHeight;
       const y1 = y0 + win.height;
-      if (x0 < 0.05 || x1 > wallLen - 0.05) continue;
-      if (y1 > floorH - 0.05) continue;
+      if (x0 < OPENING_BOUNDARY_TOLERANCE || x1 > wallLen - OPENING_BOUNDARY_TOLERANCE) continue;
+      const topLimit = Math.min(maxYAtX(x0), maxYAtX(x1));
+      if (y1 > topLimit - OPENING_BOUNDARY_TOLERANCE) continue;
       const hole = new THREE.Path();
       hole.moveTo(x0, y0);
       hole.lineTo(x1, y0);
@@ -189,8 +203,9 @@ export class BuildingGenerator {
       const x0 = door.offsetAlongWall;
       const x1 = x0 + door.width;
       const y1 = door.height;
-      if (x0 < 0.05 || x1 > wallLen - 0.05) continue;
-      if (y1 > floorH - 0.05) continue;
+      if (x0 < OPENING_BOUNDARY_TOLERANCE || x1 > wallLen - OPENING_BOUNDARY_TOLERANCE) continue;
+      const topLimit = Math.min(maxYAtX(x0), maxYAtX(x1));
+      if (y1 > topLimit - OPENING_BOUNDARY_TOLERANCE) continue;
       const hole = new THREE.Path();
       hole.moveTo(x0, 0.0);
       hole.lineTo(x1, 0.0);

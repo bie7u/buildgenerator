@@ -246,7 +246,15 @@ export class FloorPlanEditor {
     }
 
     if (e.button === 2 || e.button === 1) {
-      // Right/middle drag = pan
+      // Right-click in select mode on a wall segment → open elevation editor
+      if (e.button === 2 && this.tool === 'select') {
+        const seg = this._findNearestWallSegment(pos, 1.0);
+        if (seg) {
+          this.app.openElevation(this.currentFloorIndex, seg.wallIndex);
+          return;
+        }
+      }
+      // Otherwise right/middle drag = pan
       this._isPanning = true;
       this._panStart = { x: e.clientX, y: e.clientY };
       return;

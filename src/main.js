@@ -4,6 +4,7 @@ import { Building } from './models/Building.js';
 import { SceneManager } from './SceneManager.js';
 import { GridSystem } from './GridSystem.js';
 import { FloorPlanEditor } from './editors/FloorPlanEditor.js';
+import { SideElevationEditor } from './editors/SideElevationEditor.js';
 import { BuildingGenerator } from './generators/BuildingGenerator.js';
 import { UIManager } from './ui/UIManager.js';
 
@@ -16,8 +17,13 @@ const app = {
   sceneManager: null,
   grid: null,
   editor: null,
+  elevationEditor: null,
   generator: null,
   ui: null,
+
+  // Currently selected wall segment for the elevation editor
+  elevationFloorIndex: 0,
+  elevationWallIndex: 0,
 
   /** Currently active building */
   get building() {
@@ -26,17 +32,43 @@ const app = {
 
   setMode(mode) {
     this.mode = mode;
-    this.sceneManager.setMode(mode);
-    document.getElementById('btn-2d').classList.toggle('active', mode === '2d');
-    document.getElementById('btn-3d').classList.toggle('active', mode === '3d');
-    if (mode === '2d') {
-      this.editor.redraw();
-    } else {
-      // Clear HTML overlay labels when leaving 2D mode
+
+    // Elevation view is independent — it shows/hides its own panel
+    const is2d  = (mode === '2d');
+    const is3d  = (mode === '3d');
+    const isElev = (mode === 'elevation');
+
+    this.sceneManager.setMode(is3d ? '3d' : '2d');
+
+    document.getElementById('btn-2d').classList.toggle('active', is2d);
+    document.getElementById('btn-3d').classList.toggle('active', is3d);
+    document.getElementById('btn-elevation')?.classList.toggle('active', isElev);
+
+    if (isElev) {
+      // Hide floor-plan canvas, show elevation panel
       this.editor._hideDimEdit();
-      const labelContainer = document.getElementById('canvas-labels');
-      if (labelContainer) labelContainer.innerHTML = '';
+      const lc = document.getElementById('canvas-labels');
+      if (lc) lc.innerHTML = '';
+      this.elevationEditor.show(this.elevationFloorIndex, this.elevationWallIndex);
+    } else {
+      // Make sure elevation is hidden
+      if (this.elevationEditor?.visible) this.elevationEditor.hide();
+
+      if (is2d) {
+        this.editor.redraw();
+      } else {
+        this.editor._hideDimEdit();
+        const lc = document.getElementById('canvas-labels');
+        if (lc) lc.innerHTML = '';
+      }
     }
+  },
+
+  /** Open the elevation editor for the given floor + wall segment. */
+  openElevation(floorIndex, wallIndex) {
+    this.elevationFloorIndex = floorIndex;
+    this.elevationWallIndex  = wallIndex;
+    this.setMode('elevation');
   },
 
   addBuilding() {
@@ -127,10 +159,23 @@ function init() {
   app.sceneManager = new SceneManager(canvas);
   app.grid = new GridSystem(null, app.sceneManager.gridGroup);
   app.editor = new FloorPlanEditor(app.sceneManager, app);
+  app.elevationEditor = new SideElevationEditor(app.sceneManager, app);
   app.generator = new BuildingGenerator(app.sceneManager);
   app.ui = new UIManager(app);
 
   app.sceneManager.startLoop();
+
+  // Toolbar: elevation button
+  const btnElev = document.getElementById('btn-elevation');
+  if (btnElev) {
+    btnElev.addEventListener('click', () => {
+      if (app.mode === 'elevation') {
+        app.setMode('2d');
+      } else {
+        app.setMode('elevation');
+      }
+    });
+  }
 
   // Initial status
   document.getElementById('status-hint').textContent =
