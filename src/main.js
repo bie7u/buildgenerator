@@ -9,7 +9,8 @@ import { UIManager } from './ui/UIManager.js';
 
 // Application state object
 const app = {
-  building: new Building(),
+  buildings: [new Building()],
+  currentBuildingIndex: 0,
   currentFloorIndex: 0,
   mode: '2d',
   sceneManager: null,
@@ -17,6 +18,11 @@ const app = {
   editor: null,
   generator: null,
   ui: null,
+
+  /** Currently active building */
+  get building() {
+    return this.buildings[this.currentBuildingIndex];
+  },
 
   setMode(mode) {
     this.mode = mode;
@@ -28,14 +34,61 @@ const app = {
     }
   },
 
+  addBuilding() {
+    this.buildings.push(new Building());
+    this.currentBuildingIndex = this.buildings.length - 1;
+    this.currentFloorIndex = 0;
+    if (this.editor) this.editor.resetState();
+    if (this.ui) {
+      this.ui._updateBuildingSelector();
+      this.ui._updateFloorSelector();
+      this.ui.updateBuildingInfo();
+    }
+  },
+
+  removeBuilding() {
+    if (this.buildings.length <= 1) return;
+    this.buildings.splice(this.currentBuildingIndex, 1);
+    this.currentBuildingIndex = Math.min(this.currentBuildingIndex, this.buildings.length - 1);
+    this.currentFloorIndex = 0;
+    if (this.editor) {
+      this.editor.resetState();  // already calls redraw()
+    }
+    if (this.ui) {
+      this.ui._updateBuildingSelector();
+      this.ui._updateFloorSelector();
+      this.ui._updateBuildingSettingsInputs();
+      this.ui.updateBuildingInfo();
+    }
+  },
+
+  switchBuilding(index) {
+    this.currentBuildingIndex = index;
+    this.currentFloorIndex = Math.min(
+      this.currentFloorIndex,
+      this.building.floors.length - 1
+    );
+    if (this.editor) {
+      this.editor.resetState();
+    }
+    if (this.ui) {
+      this.ui._updateFloorSelector();
+      this.ui._updateBuildingSettingsInputs();
+      this.ui.updateBuildingInfo();
+    }
+  },
+
   generate3D() {
-    if (this.building.contour.length < 3) {
+    const hasValid = this.buildings.some(b => b.contour.length >= 3);
+    if (!hasValid) {
       document.getElementById('status-hint').textContent =
         'Draw a floor contour first (at least 3 points).';
       return;
     }
-    this.building.normalizeContourWinding();
-    this.generator.generate(this.building);
+    for (const b of this.buildings) {
+      if (b.contour.length >= 3) b.normalizeContourWinding();
+    }
+    this.generator.generateAll(this.buildings);
     this.setMode('3d');
     document.getElementById('status-hint').textContent =
       'Use mouse to orbit, scroll to zoom, right-drag to pan.';
@@ -68,7 +121,7 @@ function init() {
 
   app.sceneManager = new SceneManager(canvas);
   app.grid = new GridSystem(null, app.sceneManager.gridGroup);
-  app.editor = new FloorPlanEditor(app.sceneManager, app.building, app);
+  app.editor = new FloorPlanEditor(app.sceneManager, app);
   app.generator = new BuildingGenerator(app.sceneManager);
   app.ui = new UIManager(app);
 

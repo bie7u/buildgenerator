@@ -25,6 +25,13 @@
       <button id="btn-3d" class="toolbar-btn" title="3D Building View">3D View</button>
     </div>
 
+    <div class="toolbar-section toolbar-buildings">
+      <span class="toolbar-label">BUILDING</span>
+      <select id="building-select" title="Select building"></select>
+      <button id="btn-add-building" class="toolbar-btn icon-btn" title="Add new building">+</button>
+      <button id="btn-remove-building" class="toolbar-btn icon-btn" title="Remove current building">−</button>
+    </div>
+
     <div class="toolbar-section toolbar-floors">
       <span class="toolbar-label">FLOOR</span>
       <select id="floor-select" title="Select floor"></select>
@@ -116,6 +123,7 @@
       <div class="panel-section">
         <div class="panel-title">INFO</div>
         <div id="building-info">
+          <div class="info-row"><span class="info-key">Buildings:</span><span id="info-buildings">1</span></div>
           <div class="info-row"><span class="info-key">Floors:</span><span id="info-floors">1</span></div>
           <div class="info-row"><span class="info-key">Contour pts:</span><span id="info-contour">0</span></div>
           <div class="info-row"><span class="info-key">Int. Walls:</span><span id="info-walls">0</span></div>

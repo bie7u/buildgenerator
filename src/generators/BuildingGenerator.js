@@ -20,17 +20,30 @@ export class BuildingGenerator {
     this.railingMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
   }
 
-  generate(building) {
-    // Clear previous geometry
+  /**
+   * Generate 3D geometry for a collection of buildings.
+   * Clears previous geometry first.
+   */
+  generateAll(buildings) {
     const group = this.sm.buildingGroup;
     while (group.children.length) {
       const child = group.children[0];
       this._disposeObject(child);
       group.remove(child);
     }
+    for (const building of buildings) {
+      if (building.contour.length >= 3) {
+        this._generateBuilding(building, group);
+      }
+    }
+  }
 
-    if (building.contour.length < 3) return;
+  /** @deprecated - use generateAll() */
+  generate(building) {
+    this.generateAll([building]);
+  }
 
+  _generateBuilding(building, group) {
     // Compute floor base Y positions
     let baseY = 0;
     const floorBases = [];
@@ -38,7 +51,6 @@ export class BuildingGenerator {
       floorBases.push(baseY);
       baseY += floor.height;
     }
-    const totalHeight = baseY;
 
     // Ground floor slab (bottom of building) — no floor holes
     this._addSlab(building, 0, null, group);

@@ -83,9 +83,8 @@ function makeFilledContour(contour, color, opacity) {
 }
 
 export class FloorPlanEditor {
-  constructor(sceneManager, building, app) {
+  constructor(sceneManager, app) {
     this.sm = sceneManager;
-    this.building = building;
     this.app = app;
 
     this.tool = 'select';
@@ -131,6 +130,31 @@ export class FloorPlanEditor {
   }
 
   // ── Tool management ───────────────────────────────────────────────────────
+
+  /** Active building — always resolves to the currently selected building */
+  get building() {
+    return this.app.building;
+  }
+
+  /**
+   * Reset all in-progress drawing/drag state without changing the active tool.
+   * Called when the user switches buildings.
+   */
+  resetState() {
+    this._isDrawingContour = false;
+    this._previewPoints = [];
+    this._isDrawingFloorHole = false;
+    this._floorHolePoints = [];
+    this._isDrawingWall = false;
+    this._wallStart = null;
+    this._isDragging = false;
+    this._dragTarget = null;
+    this.selectedElement = null;
+    this.currentFloorIndex = this.app.currentFloorIndex;
+    if (this.app.ui) this.app.ui.clearProperties();
+    this.redraw();
+  }
+
   setTool(tool) {
     this.tool = tool;
     this._isDrawingContour = false;
@@ -821,6 +845,24 @@ export class FloorPlanEditor {
   }
 
   _drawContourAndVertices() {
+    // Draw all inactive buildings first (dimmed ghost)
+    for (let bi = 0; bi < this.app.buildings.length; bi++) {
+      if (bi === this.app.currentBuildingIndex) continue;
+      const b = this.app.buildings[bi];
+      const bc = b.contour;
+      if (bc.length < 2) continue;
+      if (this.ghostFill && bc.length >= 3) {
+        const fill = makeFilledContour(bc, 0x555566, 0.09);
+        this.sm.editGroup.add(fill);
+      }
+      this.sm.editGroup.add(makeLineLoop(bc, 0x556655));
+      // Building label dot at centroid
+      const cx = bc.reduce((s, p) => s + p.x, 0) / bc.length;
+      const cz = bc.reduce((s, p) => s + p.y, 0) / bc.length;
+      this.sm.editGroup.add(makeCircle(cx, cz, 0.2, 0x556655));
+    }
+
+    // Now draw the active building
     const c = this.building.contour;
     if (c.length === 0) return;
 

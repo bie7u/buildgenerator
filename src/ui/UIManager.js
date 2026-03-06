@@ -17,6 +17,7 @@ export class UIManager {
     this._bindTools();
     this._bindBuildingSettings();
     this._bindQuickActions();
+    this._updateBuildingSelector();
     this._updateFloorSelector();
     this.updateBuildingInfo();
   }
@@ -31,6 +32,19 @@ export class UIManager {
 
     document.getElementById('btn-3d').addEventListener('click', () => {
       app.setMode('3d');
+    });
+
+    document.getElementById('building-select').addEventListener('change', e => {
+      const idx = parseInt(e.target.value, 10);
+      app.switchBuilding(idx);
+    });
+
+    document.getElementById('btn-add-building').addEventListener('click', () => {
+      app.addBuilding();
+    });
+
+    document.getElementById('btn-remove-building').addEventListener('click', () => {
+      app.removeBuilding();
     });
 
     document.getElementById('floor-select').addEventListener('change', e => {
@@ -138,6 +152,13 @@ export class UIManager {
     });
   }
 
+  /** Sync building-scoped settings inputs to the active building. */
+  _updateBuildingSettingsInputs() {
+    const b = this.app.building;
+    document.getElementById('wall-thickness').value = b.wallThickness;
+    this._updateFloorHeightInput();
+  }
+
   // ── Quick actions ─────────────────────────────────────────────────────────
   _bindQuickActions() {
     const app = this.app;
@@ -166,21 +187,37 @@ export class UIManager {
     });
 
     document.getElementById('btn-reset-all').addEventListener('click', () => {
-      app.building.contour = [];
-      for (const floor of app.building.floors) {
-        floor.internalWalls = [];
-        floor.windows = [];
-        floor.doors = [];
-        floor.balconies = [];
-        floor.elevator = null;
-        floor.stairs = null;
-        floor.floorHoles = [];
+      // Reset ALL buildings
+      for (const b of app.buildings) {
+        b.contour = [];
+        for (const floor of b.floors) {
+          floor.internalWalls = [];
+          floor.windows = [];
+          floor.doors = [];
+          floor.balconies = [];
+          floor.elevator = null;
+          floor.stairs = null;
+          floor.floorHoles = [];
+        }
       }
       app.editor.selectedElement = null;
       this.clearProperties();
       app.editor.redraw();
       this.updateBuildingInfo();
     });
+  }
+
+  // ── Building selector ─────────────────────────────────────────────────────
+  _updateBuildingSelector() {
+    const sel = document.getElementById('building-select');
+    sel.innerHTML = '';
+    for (let i = 0; i < this.app.buildings.length; i++) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `Building ${i + 1}`;
+      sel.appendChild(opt);
+    }
+    sel.value = this.app.currentBuildingIndex;
   }
 
   // ── Floor selector ────────────────────────────────────────────────────────
@@ -601,6 +638,7 @@ export class UIManager {
   updateBuildingInfo() {
     const b = this.app.building;
     const floor = b.getFloor(this.app.currentFloorIndex);
+    document.getElementById('info-buildings').textContent = this.app.buildings.length;
     document.getElementById('info-floors').textContent = b.floors.length;
     document.getElementById('info-contour').textContent = b.contour.length;
     document.getElementById('info-walls').textContent = floor ? floor.internalWalls.length : 0;
