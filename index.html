@@ -109,6 +109,13 @@
     <!-- CENTER: Canvas -->
     <div id="canvas-container">
       <canvas id="canvas"></canvas>
+      <!-- HTML overlay for contour dimension labels -->
+      <div id="canvas-labels"></div>
+      <!-- Floating input for editing a segment length or angle -->
+      <div id="dim-edit-popup">
+        <span class="dim-edit-type-label">Length (m):</span>
+        <input id="dim-edit-input" type="number" step="0.01" min="0.01" />
+      </div>
     </div>
 
     <!-- RIGHT PANEL: Properties -->

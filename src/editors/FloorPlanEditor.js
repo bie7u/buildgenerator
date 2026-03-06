@@ -57,6 +57,8 @@ function makeFilledRect(cx, cz, w, d, color, yOff = 0.01) {
 // ──────────────────────────────────────────────────────────────────────────
 // Radius (metres) within which a mouse click is treated as "on" a vertex
 const SNAP_THRESHOLD = 0.5;
+// Maximum interior angle allowed when editing via the dim-edit popup
+const MAX_ANGLE_DEG  = 359.9;
 
 /**
  * Renders the floor contour as a semi-transparent filled shape (ghost fill).
@@ -115,8 +117,15 @@ export class FloorPlanEditor {
     this._isDragging = false;
     this._dragTarget = null;
 
-    // Current hover world position
+    // Current hover world position (raw & snapped)
     this._cursorPos = new THREE.Vector2();
+    this._snappedCursorPos = new THREE.Vector2();
+
+    // Dimension-label HTML overlay
+    this._labelContainer = document.getElementById('canvas-labels');
+    this._dimEditPopup    = document.getElementById('dim-edit-popup');
+    this._dimEditInput    = document.getElementById('dim-edit-input');
+    this._pendingDimEdit  = null;
 
     // Bind canvas events
     const c = this.sm.canvas;
@@ -212,6 +221,9 @@ export class FloorPlanEditor {
   onMouseDown(e) {
     if (this.app.mode !== '2d') return;
 
+    // Close any open dim-edit popup on canvas click
+    this._hideDimEdit();
+
     const pos = this._snapToGrid(this.sm.getWorldPosition(e));
 
     if (e.button === 2 || e.button === 1) {
@@ -243,6 +255,7 @@ export class FloorPlanEditor {
     const rawPos = this.sm.getWorldPosition(e);
     this._cursorPos.copy(rawPos);
     const pos = this._snapToGrid(rawPos);
+    this._snappedCursorPos.copy(pos);
 
     // Update status bar
     this.app.ui.updateStatusBar(
@@ -254,6 +267,8 @@ export class FloorPlanEditor {
       const dy = e.clientY - this._panStart.y;
       this.sm.pan2d(dx, dy);
       this._panStart = { x: e.clientX, y: e.clientY };
+      // Reposition HTML labels when camera moves
+      this.redraw();
       return;
     }
 
@@ -864,7 +879,250 @@ export class FloorPlanEditor {
     return new THREE.Vector2(p1.x + dir.x * midOff, p1.y + dir.y * midOff);
   }
 
-  // ── Redraw ────────────────────────────────────────────────────────────────
+  // ── Dimension labels ──────────────────────────────────────────────────────
+
+  /**
+   * Interior angle (degrees) at vertex `curr` between edges prev→curr and curr→next.
+   * Returns a value in [0°, 360°]; 90° for a right-angle corner.
+   */
+  _interiorAngleDeg(prev, curr, next) {
+    const d1x = curr.x - prev.x, d1y = curr.y - prev.y;
+    const d1len = Math.sqrt(d1x * d1x + d1y * d1y);
+    if (d1len < 0.001) return 0;
+    const d2x = next.x - curr.x, d2y = next.y - curr.y;
+    const d2len = Math.sqrt(d2x * d2x + d2y * d2y);
+    if (d2len < 0.001) return 0;
+    // Normalised reversed-incoming (points away from vertex along edge 1)
+    const rx = -d1x / d1len, ry = -d1y / d1len;
+    // Normalised outgoing
+    const ox = d2x / d2len, oy = d2y / d2len;
+    const dot   = rx * ox + ry * oy;
+    const cross = rx * oy - ry * ox;
+    // After normalizeContourWinding, our polygon is CW in standard math = CCW-on-screen.
+    // For a CW polygon: cross > 0 → convex (interior ≤ 180°), cross < 0 → reflex (> 180°).
+    let angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+    if (cross < 0) angle = 2 * Math.PI - angle;
+    return angle * 180 / Math.PI;
+  }
+
+  /** Project world XZ position to canvas pixel coordinates. */
+  _worldToScreen(wx, wz) {
+    return this.sm.worldToScreen(wx, wz);
+  }
+
+  /**
+   * Rebuild the HTML overlay of segment-length and vertex-angle labels.
+   * Called every redraw so labels track the camera on pan/zoom.
+   */
+  _updateContourLabels() {
+    const container = this._labelContainer;
+    if (!container) return;
+    container.innerHTML = '';
+    if (this.app.mode !== '2d') return;
+
+    const canEdit = (this.tool === 'select' || this.tool === 'move');
+    const isPreview = this._isDrawingContour && this._previewPoints.length >= 1;
+
+    // Choose which points to label
+    const pts = isPreview ? this._previewPoints : (() => {
+      const c = this.activeContour;
+      return (c && c.length >= 2) ? c : null;
+    })();
+    if (!pts) return;
+
+    const n = pts.length;
+
+    // ── Segment length labels ─────────────────────────────────────────────
+    const segCount = isPreview ? (n - 1) : n; // open chain vs closed loop
+    for (let i = 0; i < segCount; i++) {
+      const p1 = pts[i];
+      const p2 = pts[(i + 1) % n];
+      const dx = p2.x - p1.x, dz = p2.y - p1.y;
+      const len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 0.01) continue;
+
+      // Midpoint offset slightly perpendicular (0.35 m inward for CW polygon)
+      const mx = (p1.x + p2.x) / 2 + (dz / len) * 0.35;
+      const mz = (p1.y + p2.y) / 2 + (-dx / len) * 0.35;
+      const sc = this._worldToScreen(mx, mz);
+
+      const lbl = document.createElement('div');
+      lbl.className = 'dim-label' + (canEdit && !isPreview ? ' clickable' : '');
+      lbl.textContent = len.toFixed(2) + ' m';
+      lbl.style.left = sc.x + 'px';
+      lbl.style.top  = sc.y + 'px';
+      if (canEdit && !isPreview) {
+        const si = i;
+        lbl.addEventListener('click', e => {
+          e.stopPropagation();
+          this._showDimEdit(sc.x, sc.y, len, 'length', si);
+        });
+      }
+      container.appendChild(lbl);
+    }
+
+    // Preview: length label for cursor→last-point dashed line
+    if (isPreview) {
+      const last   = pts[n - 1];
+      const cursor = this._snappedCursorPos;
+      const dx = cursor.x - last.x, dz = cursor.y - last.y;
+      const len = Math.sqrt(dx * dx + dz * dz);
+      if (len > 0.01) {
+        const sc = this._worldToScreen((last.x + cursor.x) / 2, (last.y + cursor.y) / 2);
+        const lbl = document.createElement('div');
+        lbl.className = 'dim-label dim-preview';
+        lbl.textContent = len.toFixed(2) + ' m';
+        lbl.style.left = sc.x + 'px';
+        lbl.style.top  = sc.y + 'px';
+        container.appendChild(lbl);
+      }
+    }
+
+    // ── Angle labels at vertices ──────────────────────────────────────────
+    if (!isPreview && n >= 3) {
+      for (let i = 0; i < n; i++) {
+        const prev  = pts[(i - 1 + n) % n];
+        const curr  = pts[i];
+        const next  = pts[(i + 1) % n];
+        const angle = this._interiorAngleDeg(prev, curr, next);
+
+        // Offset toward polygon interior along bisector of the two edge directions
+        const d1x = -(curr.x - prev.x), d1y = -(curr.y - prev.y);
+        const d2x =  (next.x - curr.x), d2y =  (next.y - curr.y);
+        const d1l = Math.sqrt(d1x * d1x + d1y * d1y) || 1;
+        const d2l = Math.sqrt(d2x * d2x + d2y * d2y) || 1;
+        const bx  = d1x / d1l + d2x / d2l;
+        const by  = d1y / d1l + d2y / d2l;
+        const bl  = Math.sqrt(bx * bx + by * by) || 1;
+        const OFF = 0.8; // metres inward
+        const sc  = this._worldToScreen(curr.x + bx / bl * OFF, curr.y + by / bl * OFF);
+
+        const lbl = document.createElement('div');
+        lbl.className = 'dim-label-angle' + (canEdit ? ' clickable' : '');
+        lbl.textContent = angle.toFixed(1) + '°';
+        lbl.style.left = sc.x + 'px';
+        lbl.style.top  = sc.y + 'px';
+        if (canEdit) {
+          const vi = i;
+          lbl.addEventListener('click', e => {
+            e.stopPropagation();
+            this._showDimEdit(sc.x, sc.y, angle, 'angle', vi);
+          });
+        }
+        container.appendChild(lbl);
+      }
+    }
+
+    // Preview: live angle label at the last drawn vertex (second-to-last → last → cursor)
+    if (isPreview && n >= 2) {
+      const prev   = pts[n - 2];
+      const curr   = pts[n - 1];
+      const cursor = this._snappedCursorPos;
+      const dx = cursor.x - curr.x, dz = cursor.y - curr.y;
+      if (Math.sqrt(dx * dx + dz * dz) > 0.01) {
+        const angle = this._interiorAngleDeg(prev, curr, cursor);
+        const sc    = this._worldToScreen(curr.x, curr.y);
+        const lbl   = document.createElement('div');
+        lbl.className = 'dim-label-angle dim-preview';
+        lbl.textContent = angle.toFixed(1) + '°';
+        lbl.style.left = (sc.x + 10) + 'px';
+        lbl.style.top  = (sc.y - 10) + 'px';
+        container.appendChild(lbl);
+      }
+    }
+  }
+
+  /**
+   * Show the floating dim-edit popup at canvas pixel position (sx, sy).
+   * type: 'length' | 'angle'
+   */
+  _showDimEdit(sx, sy, currentVal, type, index) {
+    const popup = this._dimEditPopup;
+    const input = this._dimEditInput;
+    if (!popup || !input) return;
+
+    const labelEl = popup.querySelector('.dim-edit-type-label');
+    if (labelEl) labelEl.textContent = type === 'length' ? 'Length (m):' : 'Angle (°):';
+
+    input.step = type === 'length' ? '0.01' : '1';
+    input.min  = type === 'length' ? '0.01' : '0.1';
+    input.max  = type === 'angle'  ? String(MAX_ANGLE_DEG) : '';
+    input.value = currentVal.toFixed(type === 'length' ? 2 : 1);
+
+    popup.style.display = 'block';
+    popup.style.left    = sx + 'px';
+    popup.style.top     = sy + 'px';
+
+    this._pendingDimEdit = { type, index };
+
+    input.onkeydown = e => {
+      if (e.key === 'Enter') {
+        const v = parseFloat(input.value);
+        if (!isNaN(v)) {
+          const contour = this.activeContour;
+          if (type === 'length') {
+            this._applySegmentLengthEdit(contour, index, v);
+          } else {
+            this._applyAngleEdit(contour, index, v);
+          }
+          this.redraw();
+          this.app.ui?.updateBuildingInfo();
+        }
+        this._hideDimEdit();
+      } else if (e.key === 'Escape') {
+        this._hideDimEdit();
+      }
+      e.stopPropagation();
+    };
+
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  }
+
+  _hideDimEdit() {
+    if (this._dimEditPopup) this._dimEditPopup.style.display = 'none';
+    this._pendingDimEdit = null;
+  }
+
+  /**
+   * Move the endpoint of segment `segIndex` so the segment length equals `newLen`.
+   * Direction is preserved; only the far endpoint (index+1) moves.
+   */
+  _applySegmentLengthEdit(contour, segIndex, newLen) {
+    if (!contour || newLen < 0.01) return;
+    const n = contour.length;
+    const p1 = contour[segIndex];
+    const p2 = contour[(segIndex + 1) % n];
+    const dx = p2.x - p1.x, dz = p2.y - p1.y;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) return;
+    const scale = newLen / len;
+    contour[(segIndex + 1) % n].set(p1.x + dx * scale, p1.y + dz * scale);
+  }
+
+  /**
+   * Rotate v[vertexIndex+1] around v[vertexIndex] so the interior angle at
+   * v[vertexIndex] becomes `newAngleDeg`. The outgoing edge length is preserved.
+   */
+  _applyAngleEdit(contour, vertexIndex, newAngleDeg) {
+    if (!contour) return;
+    const clampedAngle = Math.max(0.1, Math.min(MAX_ANGLE_DEG, newAngleDeg));
+    const n    = contour.length;
+    const prev = contour[(vertexIndex - 1 + n) % n];
+    const curr = contour[vertexIndex];
+    const next = contour[(vertexIndex + 1) % n];
+
+    const currAngle = this._interiorAngleDeg(prev, curr, next);
+    const delta     = clampedAngle - currAngle;
+    // For a CW polygon (CCW-on-screen), CCW rotation of the outgoing edge increases interior angle.
+    const rotRad = delta * Math.PI / 180;
+
+    const dx = next.x - curr.x, dz = next.y - curr.y;
+    const cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
+    contour[(vertexIndex + 1) % n].set(
+      curr.x + dx * cosR - dz * sinR,
+      curr.y + dx * sinR + dz * cosR,
+    );
+  }
   redraw() {
     // Clear edit group
     while (this.sm.editGroup.children.length) {
@@ -880,6 +1138,9 @@ export class FloorPlanEditor {
     if (floor) {
       this._drawFloorElements(floor);
     }
+
+    // Update HTML dimension labels (segment lengths + angles)
+    this._updateContourLabels();
   }
 
   _drawContourAndVertices() {

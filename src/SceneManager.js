@@ -163,4 +163,17 @@ export class SceneManager {
     this.camera2d.position.z += dy * worldPerPx;
     this.camera2d.lookAt(this.camera2d.position.x, 0, this.camera2d.position.z);
   }
+
+  /** Project world XZ coordinates to canvas pixel coordinates (top-left origin). */
+  worldToScreen(wx, wz) {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w === 0 || h === 0) return { x: 0, y: 0 };
+    const vec = new THREE.Vector3(wx, 0, wz);
+    vec.project(this.camera2d);
+    return {
+      x: (vec.x + 1) / 2 * w,
+      y: (-vec.y + 1) / 2 * h,
+    };
+  }
 }

@@ -31,6 +31,11 @@ const app = {
     document.getElementById('btn-3d').classList.toggle('active', mode === '3d');
     if (mode === '2d') {
       this.editor.redraw();
+    } else {
+      // Clear HTML overlay labels when leaving 2D mode
+      this.editor._hideDimEdit();
+      const labelContainer = document.getElementById('canvas-labels');
+      if (labelContainer) labelContainer.innerHTML = '';
     }
   },
 
