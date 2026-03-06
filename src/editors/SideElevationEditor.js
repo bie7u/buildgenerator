@@ -5,11 +5,11 @@ import { WallBevel } from '../models/WallBevel.js';
 
 /** Radius within which a click is treated as "on" a handle */
 const HANDLE_HIT_RADIUS = 12; // pixels
-/** Multiplier for the drag handle hit area (larger = easier to grab) */
+/** Multiplier for the drag handle hit area */
 const HANDLE_HIT_MULTIPLIER = 1.5;
 /** Minimum allowed bevel height in metres */
 const MIN_BEVEL_HEIGHT = 0.1;
-/** Minimum allowed width of the bevel region in metres */
+/** Minimum allowed width of a bevel region in metres */
 const MIN_BEVEL_WIDTH = 0.1;
 /** Distance in metres within which an offset handle snaps to the wall end */
 const SNAP_TO_END_THRESHOLD = 0.05;
@@ -17,15 +17,15 @@ const SNAP_TO_END_THRESHOLD = 0.05;
 /**
  * Side Elevation Editor
  *
- * 2D canvas view showing one external wall segment from the side.
- * Lets the user define a partial bevel (sloped top cut) by dragging handles.
+ * 2D canvas view for one external wall segment, showing ALL wall bevels.
+ * Supports multiple independent bevels per wall (e.g., one from each side).
  *
- * Bevel region: offsetStart … offsetEnd along the wall
- *   - Two offset handles  (orange, on the floor line)   drag horizontally
- *   - Two height handles  (cyan,   on the bevel top)    drag vertically
+ * Header controls:
+ *   Floor select | Wall ◀ N/total ▶ | Bevel ◀ N/total ▶ | [+Add] [−Del] | [✕ Close]
  *
- * Header contains floor <select> + wall prev/next, so users can switch walls
- * without leaving the elevation view.
+ * Per-bevel handles:
+ *   cyan handles  ↕  at bevel top corners     → drag to change height
+ *   orange handles ↔  on the floor line        → drag to move bevel boundary
  */
 export class SideElevationEditor {
   constructor(sceneManager, app) {
@@ -36,6 +36,9 @@ export class SideElevationEditor {
     this.floorIndex  = 0;
     this.wallIndex   = 0;
 
+    // Index within the per-wall bevel array (sorted by offsetStart)
+    this._activeBevelIdx = 0;
+
     // Canvas / DOM refs
     this._canvas         = null;
     this._ctx            = null;
@@ -43,15 +46,16 @@ export class SideElevationEditor {
     this._labelContainer = null;
     this._floorSelect    = null;
     this._wallLabel      = null;
+    this._bevelLabel     = null;
     this._visible        = false;
 
     // Active drag handle: null | 'heightStart' | 'heightEnd' | 'offsetStart' | 'offsetEnd'
     this._dragging = null;
 
-    // View transform (pixels per metre, and origin offsets in pixels)
+    // View transform
     this._scale   = 60;
-    this._offsetX = 70;  // left margin px
-    this._offsetY = 40;  // bottom margin px (from canvas bottom)
+    this._offsetX = 70;
+    this._offsetY = 40;
 
     this._buildDOM();
   }
@@ -66,7 +70,7 @@ export class SideElevationEditor {
       'background:#111', 'z-index:10', 'flex-direction:column',
     ].join(';');
 
-    // ── Header bar ───────────────────────────────────────────────────────────
+    // ── Header ───────────────────────────────────────────────────────────────
     const header = document.createElement('div');
     header.style.cssText = [
       'display:flex', 'align-items:center', 'gap:8px', 'flex-wrap:wrap',
@@ -77,10 +81,10 @@ export class SideElevationEditor {
     // Title
     const title = document.createElement('span');
     title.id = 'elevation-title';
-    title.style.cssText = 'color:#ccc;font-size:12px;font-weight:600;min-width:120px';
+    title.style.cssText = 'color:#ccc;font-size:12px;font-weight:600;min-width:100px';
     title.textContent = 'Side Elevation';
 
-    // Floor label + select
+    // Floor select
     const floorLbl = this._makeLabel('Floor:');
     const floorSel = document.createElement('select');
     floorSel.style.cssText = [
@@ -91,30 +95,65 @@ export class SideElevationEditor {
       this.floorIndex = parseInt(floorSel.value, 10);
       const maxWall = this._getWallCount() - 1;
       if (this.wallIndex > maxWall) this.wallIndex = Math.max(0, maxWall);
+      this._activeBevelIdx = 0;
       this._updateWallLabel();
+      this._updateBevelLabel();
       this._fitView();
       this.redraw();
       this._updateTitle();
     });
     this._floorSelect = floorSel;
 
-    // Wall label + prev / counter / next
+    // Wall nav
     const wallLbl  = this._makeLabel('Wall:');
-    const wallPrev = this._makeBtn('◀', () => this._stepWall(-1));
+    const wallPrev = this._makeBtn('\u25c4', () => this._stepWall(-1));
     const wallCnt  = document.createElement('span');
     wallCnt.style.cssText = 'color:#ccc;font-size:11px;font-weight:600;min-width:44px;text-align:center';
     this._wallLabel = wallCnt;
-    const wallNext = this._makeBtn('▶', () => this._stepWall(1));
+    const wallNext = this._makeBtn('\u25ba', () => this._stepWall(1));
+
+    // Separator
+    const sep = document.createElement('span');
+    sep.style.cssText = 'color:#444;font-size:11px';
+    sep.textContent = '|';
+
+    // Bevel nav
+    const bevelLbl  = this._makeLabel('Bevel:');
+    const bevelPrev = this._makeBtn('\u25c4', () => this._stepBevel(-1));
+    const bevelCnt  = document.createElement('span');
+    bevelCnt.style.cssText = 'color:#ccc;font-size:11px;font-weight:600;min-width:44px;text-align:center';
+    this._bevelLabel = bevelCnt;
+    const bevelNext = this._makeBtn('\u25ba', () => this._stepBevel(1));
+
+    // Add / Delete bevel buttons
+    const btnAdd = this._makeBtn('+\u00a0Add', () => this._addNewBevel());
+    btnAdd.style.background = '#1a3a1a';
+    btnAdd.style.borderColor = '#3a7a3a';
+    btnAdd.style.color = '#88ee88';
+
+    const btnDel = this._makeBtn('\u2212\u00a0Del', () => this._deleteActiveBevel());
+    btnDel.style.background = '#3a1a1a';
+    btnDel.style.borderColor = '#7a3a3a';
+    btnDel.style.color = '#ee8888';
 
     // Hint
     const hint = document.createElement('span');
     hint.style.cssText = 'color:#555;font-size:10px;flex:1';
-    hint.textContent = 'Drag cyan handles ↕ (height) or orange handles ↔ (bevel start/end). Right-click → reset.';
+    hint.textContent = 'Drag cyan handles \u2195 (height) or orange handles \u2194 (bevel region). Right-click \u2192 delete active bevel.';
 
-    // Close button – calls app.setMode so app.mode is kept in sync
-    const btnClose = this._makeBtn('✕ Close', () => this.app.setMode('2d'));
+    // Close
+    const btnClose = this._makeBtn('\u2715\u00a0Close', () => this.app.setMode('2d'));
 
-    header.append(title, floorLbl, floorSel, wallLbl, wallPrev, wallCnt, wallNext, hint, btnClose);
+    header.append(
+      title,
+      floorLbl, floorSel,
+      wallLbl, wallPrev, wallCnt, wallNext,
+      sep,
+      bevelLbl, bevelPrev, bevelCnt, bevelNext,
+      btnAdd, btnDel,
+      hint,
+      btnClose,
+    );
 
     // ── Canvas area ──────────────────────────────────────────────────────────
     const canvasWrap = document.createElement('div');
@@ -133,7 +172,6 @@ export class SideElevationEditor {
     canvasWrap.append(canvas, labels);
     container.append(header, canvasWrap);
 
-    // Insert after canvas-container in the DOM
     const cc = document.getElementById('canvas-container');
     if (cc?.parentElement) {
       cc.parentElement.insertBefore(container, cc.nextSibling);
@@ -142,11 +180,10 @@ export class SideElevationEditor {
     }
     this._container = container;
 
-    // Canvas event listeners
-    canvas.addEventListener('mousedown',    e => this._onMouseDown(e));
-    canvas.addEventListener('mousemove',    e => this._onMouseMove(e));
-    canvas.addEventListener('mouseup',       () => this._onMouseUp());
-    canvas.addEventListener('contextmenu',  e => { e.preventDefault(); this._resetBevel(); });
+    canvas.addEventListener('mousedown',   e => this._onMouseDown(e));
+    canvas.addEventListener('mousemove',   e => this._onMouseMove(e));
+    canvas.addEventListener('mouseup',      () => this._onMouseUp());
+    canvas.addEventListener('contextmenu', e => { e.preventDefault(); this._deleteActiveBevel(); });
     canvas.addEventListener('wheel', e => { e.preventDefault(); this._onWheel(e); }, { passive: false });
     window.addEventListener('resize', () => { if (this._visible) this.redraw(); });
   }
@@ -172,11 +209,13 @@ export class SideElevationEditor {
   // ── Public API ─────────────────────────────────────────────────────────────
 
   show(floorIndex, wallIndex) {
-    this.floorIndex = floorIndex;
-    this.wallIndex  = wallIndex;
+    this.floorIndex      = floorIndex;
+    this.wallIndex       = wallIndex;
+    this._activeBevelIdx = 0;
 
     this._populateFloorSelect();
     this._updateWallLabel();
+    this._updateBevelLabel();
 
     this._container.style.display = 'flex';
     const cc = document.getElementById('canvas-container');
@@ -212,20 +251,20 @@ export class SideElevationEditor {
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const d = this._getWallData();
-    if (d.wallLen < 0.01) {
+    const base = this._getWallBase();
+    if (base.wallLen < 0.01) {
       ctx.fillStyle = '#555';
       ctx.font = '14px sans-serif';
       ctx.fillText('No wall selected or contour not drawn.', 40, canvas.height / 2);
       return;
     }
 
-    this._drawGrid(ctx, canvas.width, canvas.height, d);
-    this._drawWall(ctx, canvas.width, canvas.height, d);
-    this._updateLabels(d);
+    this._drawGrid(ctx, canvas.width, canvas.height, base);
+    this._drawWall(ctx, canvas.width, canvas.height, base);
+    this._updateLabels(base);
   }
 
-  // ── Floor / wall selectors ─────────────────────────────────────────────────
+  // ── Floor / wall / bevel selectors ─────────────────────────────────────────
 
   _populateFloorSelect() {
     const sel = this._floorSelect;
@@ -250,8 +289,10 @@ export class SideElevationEditor {
   _stepWall(delta) {
     const count = this._getWallCount();
     if (count === 0) return;
-    this.wallIndex = (this.wallIndex + delta + count) % count;
+    this.wallIndex       = (this.wallIndex + delta + count) % count;
+    this._activeBevelIdx = 0;
     this._updateWallLabel();
+    this._updateBevelLabel();
     this._fitView();
     this.redraw();
     this._updateTitle();
@@ -260,13 +301,48 @@ export class SideElevationEditor {
   _updateWallLabel() {
     if (!this._wallLabel) return;
     const count = this._getWallCount();
-    this._wallLabel.textContent = count ? (this.wallIndex + 1) + ' / ' + count : '—';
+    this._wallLabel.textContent = count ? (this.wallIndex + 1) + ' / ' + count : '\u2014';
+  }
+
+  // Sorted bevels for the current wall
+  _getBevelsForWall() {
+    const floor = this._getFloor();
+    if (!floor) return [];
+    return floor.wallBevels
+      .filter(bv => bv.wallIndex === this.wallIndex)
+      .sort((a, b) => a.offsetStart - b.offsetStart);
+  }
+
+  _getActiveBevel() {
+    const bevels = this._getBevelsForWall();
+    if (bevels.length === 0 || this._activeBevelIdx >= bevels.length) return null;
+    return bevels[this._activeBevelIdx];
+  }
+
+  _stepBevel(delta) {
+    const count = this._getBevelsForWall().length;
+    if (count === 0) return;
+    this._activeBevelIdx = (this._activeBevelIdx + delta + count) % count;
+    this._updateBevelLabel();
+    this.redraw();
+    this._updateTitle();
+  }
+
+  _updateBevelLabel() {
+    if (!this._bevelLabel) return;
+    const count = this._getBevelsForWall().length;
+    this._bevelLabel.textContent = count
+      ? (this._activeBevelIdx + 1) + ' / ' + count
+      : 'none';
   }
 
   _updateTitle() {
     const el = document.getElementById('elevation-title');
     if (!el) return;
-    el.textContent = 'Side Elevation — Floor ' + (this.floorIndex + 1) + ', Wall ' + (this.wallIndex + 1);
+    const n = this._getBevelsForWall().length;
+    el.textContent = 'Side Elevation \u2014 Floor ' + (this.floorIndex + 1) +
+      ', Wall ' + (this.wallIndex + 1) +
+      (n ? ' [' + n + ' bevel' + (n > 1 ? 's' : '') + ']' : '');
   }
 
   // ── Data access ────────────────────────────────────────────────────────────
@@ -275,26 +351,26 @@ export class SideElevationEditor {
     return this.app.building?.floors[this.floorIndex] ?? null;
   }
 
-  /**
-   * Returns all data needed for rendering and interaction.
-   * All values are resolved (offsetEnd is never null here).
-   */
-  _getWallData() {
+  /** Base wall data (wallLen, floorH) — independent of any bevel. */
+  _getWallBase() {
     const floor = this._getFloor();
     const b     = this.app.building;
-    const empty = { wallLen: 0, floorH: 0, hStart: 0, hEnd: 0, offStart: 0, offEnd: 0, bevel: null };
+    const empty = { wallLen: 0, floorH: 0 };
     if (!floor || !b) return empty;
-
     const contour = b.getFloorContour(this.floorIndex);
     const n = contour.length;
     if (n < 2 || this.wallIndex < 0 || this.wallIndex >= n) return empty;
-
     const p1 = contour[this.wallIndex];
     const p2 = contour[(this.wallIndex + 1) % n];
-    const wallLen = p1.distanceTo(p2);
-    const floorH  = floor.height;
+    return { wallLen: p1.distanceTo(p2), floorH: floor.height };
+  }
 
-    const bevel    = floor.wallBevels.find(bv => bv.wallIndex === this.wallIndex) ?? null;
+  /** Data for the ACTIVE bevel (or defaults if none). */
+  _getWallData() {
+    const base  = this._getWallBase();
+    const bevel = this._getActiveBevel();
+    const { wallLen, floorH } = base;
+
     const hStart   = bevel ? bevel.heightStart  : floorH;
     const hEnd     = bevel ? bevel.heightEnd    : floorH;
     const offStart = bevel ? bevel.offsetStart  : 0;
@@ -308,19 +384,88 @@ export class SideElevationEditor {
   _getOrCreateBevel() {
     const floor = this._getFloor();
     if (!floor) return null;
-    let bevel = floor.wallBevels.find(bv => bv.wallIndex === this.wallIndex);
+
+    let bevel = this._getActiveBevel();
     if (!bevel) {
-      const d = this._getWallData();
-      bevel = new WallBevel(this.wallIndex, d.floorH, d.floorH, 0, null);
+      const { wallLen, floorH } = this._getWallBase();
+      bevel = new WallBevel(this.wallIndex, floorH, floorH, 0, null);
       floor.wallBevels.push(bevel);
+      // The new bevel will be sorted into the array; find its index
+      const sorted = this._getBevelsForWall();
+      this._activeBevelIdx = sorted.findIndex(bv => bv === bevel);
+      if (this._activeBevelIdx < 0) this._activeBevelIdx = 0;
+      this._updateBevelLabel();
+      this._updateTitle();
     }
     return bevel;
   }
 
-  _resetBevel() {
+  // ── Add / Delete bevels ─────────────────────────────────────────────────────
+
+  _addNewBevel() {
     const floor = this._getFloor();
     if (!floor) return;
-    floor.wallBevels = floor.wallBevels.filter(bv => bv.wallIndex !== this.wallIndex);
+    const { wallLen, floorH } = this._getWallBase();
+    if (wallLen < MIN_BEVEL_WIDTH * 2) return;
+
+    const bevels = this._getBevelsForWall();
+
+    // Find the largest free gap on this wall
+    const taken = bevels.map(bv => ({
+      s: bv.offsetStart,
+      e: bv.offsetEnd !== null ? bv.offsetEnd : wallLen,
+    })).sort((a, b) => a.s - b.s);
+
+    const gaps = [];
+    let cursor = 0;
+    for (const seg of taken) {
+      if (seg.s > cursor + MIN_BEVEL_WIDTH) gaps.push({ s: cursor, e: seg.s });
+      cursor = Math.max(cursor, seg.e);
+    }
+    if (cursor < wallLen - MIN_BEVEL_WIDTH) gaps.push({ s: cursor, e: wallLen });
+    if (gaps.length === 0) return; // no room
+
+    gaps.sort((a, b) => (b.e - b.s) - (a.e - a.s));
+    const { s, e } = gaps[0];
+    const gapSize = e - s;
+
+    // Place the bevel in the right-side portion of the gap so there is room
+    // on the left for a future second bevel.  If the gap is small, use it all.
+    let bevelStart = s;
+    let bevelEnd   = e;
+    if (gapSize > MIN_BEVEL_WIDTH * 3) {
+      bevelStart = s + Math.round(gapSize / 2 * 10) / 10; // round to 0.1 m
+    }
+
+    const newBevel = new WallBevel(
+      this.wallIndex,
+      Math.max(MIN_BEVEL_HEIGHT, floorH * 0.7),
+      Math.max(MIN_BEVEL_HEIGHT, floorH * 0.7),
+      bevelStart,
+      Math.abs(bevelEnd - wallLen) < SNAP_TO_END_THRESHOLD ? null : bevelEnd,
+    );
+    floor.wallBevels.push(newBevel);
+
+    // Activate the newly added bevel
+    const sorted = this._getBevelsForWall();
+    this._activeBevelIdx = sorted.findIndex(bv => bv === newBevel);
+    if (this._activeBevelIdx < 0) this._activeBevelIdx = sorted.length - 1;
+
+    this._updateBevelLabel();
+    this._updateTitle();
+    this.redraw();
+  }
+
+  _deleteActiveBevel() {
+    const floor = this._getFloor();
+    if (!floor) return;
+    const bevel = this._getActiveBevel();
+    if (!bevel) return;
+    floor.wallBevels = floor.wallBevels.filter(bv => bv !== bevel);
+    const count = this._getBevelsForWall().length;
+    if (this._activeBevelIdx >= count) this._activeBevelIdx = Math.max(0, count - 1);
+    this._updateBevelLabel();
+    this._updateTitle();
     this._fitView();
     this.redraw();
   }
@@ -331,7 +476,7 @@ export class SideElevationEditor {
     const canvas = this._canvas;
     const w = canvas.offsetWidth  || 800;
     const h = canvas.offsetHeight || 500;
-    const { wallLen, floorH } = this._getWallData();
+    const { wallLen, floorH } = this._getWallBase();
     if (wallLen < 0.01) return;
 
     const marginFrac = 0.14;
@@ -362,7 +507,6 @@ export class SideElevationEditor {
     ctx.strokeStyle = '#2a2a2a';
     ctx.lineWidth   = 1;
 
-    // Horizontal grid lines
     const hStep = this._niceStep(floorH * 1.3, 8);
     for (let h = 0; h <= floorH * 1.5; h += hStep) {
       const { y } = this._elev2px(0, h);
@@ -372,7 +516,6 @@ export class SideElevationEditor {
       ctx.fillText(h.toFixed(1) + 'm', 4, y - 2);
     }
 
-    // Vertical grid lines
     const lStep = this._niceStep(wallLen, 10);
     for (let x = 0; x <= wallLen + 0.001; x += lStep) {
       if (x > wallLen + 0.001) break;
@@ -383,16 +526,13 @@ export class SideElevationEditor {
       ctx.fillText(x.toFixed(1) + 'm', px + 2, Math.min(py + 12, ch - 2));
     }
 
-    // Ground line
     const { y: gy } = this._elev2px(0, 0);
     ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cw, gy); ctx.stroke();
   }
 
-  _drawWall(ctx, cw, ch, d) {
-    const { wallLen, floorH, hStart, hEnd, offStart, offEnd } = d;
-
-    // ── Full-height background ───────────────────────────────────────────────
+  _drawWall(ctx, cw, ch, { wallLen, floorH }) {
+    // ── Full-height background ────────────────────────────────────────────────
     const bl = this._elev2px(0,       0);
     const br = this._elev2px(wallLen, 0);
     const tr = this._elev2px(wallLen, floorH);
@@ -405,7 +545,7 @@ export class SideElevationEditor {
     ctx.fillStyle = 'rgba(60,80,100,0.18)'; ctx.fill();
     ctx.strokeStyle = '#334455'; ctx.lineWidth = 1; ctx.stroke();
 
-    // Floor-height dashed reference
+    // Floor-height reference dashed line
     const { y: refY } = this._elev2px(0, floorH);
     ctx.setLineDash([6, 4]);
     ctx.strokeStyle = '#445566'; ctx.lineWidth = 1;
@@ -414,45 +554,62 @@ export class SideElevationEditor {
     ctx.fillStyle = '#445566'; ctx.font = '10px sans-serif';
     ctx.fillText('floor height: ' + floorH.toFixed(1) + 'm', 4, refY - 3);
 
-    // ── Bevel region ─────────────────────────────────────────────────────────
-    const bOs = this._elev2px(offStart, 0);
-    const bOe = this._elev2px(offEnd,   0);
-    const bHs = this._elev2px(offStart, hStart);
-    const bHe = this._elev2px(offEnd,   hEnd);
+    // ── Draw all bevels ───────────────────────────────────────────────────────
+    const allBevels = this._getBevelsForWall();
+    allBevels.forEach((bv, idx) => {
+      const isActive = idx === this._activeBevelIdx;
+      const offStart = bv.offsetStart;
+      const offEnd   = bv.offsetEnd !== null ? bv.offsetEnd : wallLen;
+      const hS = bv.heightStart;
+      const hE = bv.heightEnd;
 
-    ctx.beginPath();
-    ctx.moveTo(bOs.x, bOs.y); ctx.lineTo(bOe.x, bOe.y);
-    ctx.lineTo(bHe.x, bHe.y); ctx.lineTo(bHs.x, bHs.y);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(80,140,200,0.30)'; ctx.fill();
-    ctx.strokeStyle = '#5599cc'; ctx.lineWidth = 2; ctx.stroke();
+      const bOs = this._elev2px(offStart, 0);
+      const bOe = this._elev2px(offEnd,   0);
+      const bHs = this._elev2px(offStart, hS);
+      const bHe = this._elev2px(offEnd,   hE);
 
-    // Boundary dashed vertical lines
-    ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = '#88bbdd'; ctx.lineWidth = 1;
-    if (offStart > 0.001) {
-      const topS = this._elev2px(offStart, floorH);
-      const botS = this._elev2px(offStart, 0);
-      ctx.beginPath(); ctx.moveTo(topS.x, topS.y); ctx.lineTo(botS.x, botS.y); ctx.stroke();
-    }
-    if (offEnd < wallLen - 0.001) {
-      const topE = this._elev2px(offEnd, floorH);
-      const botE = this._elev2px(offEnd, 0);
-      ctx.beginPath(); ctx.moveTo(topE.x, topE.y); ctx.lineTo(botE.x, botE.y); ctx.stroke();
-    }
-    ctx.setLineDash([]);
+      // Bevel fill
+      ctx.beginPath();
+      ctx.moveTo(bOs.x, bOs.y); ctx.lineTo(bOe.x, bOe.y);
+      ctx.lineTo(bHe.x, bHe.y); ctx.lineTo(bHs.x, bHs.y);
+      ctx.closePath();
+      ctx.fillStyle = isActive ? 'rgba(80,140,200,0.35)' : 'rgba(80,140,200,0.12)';
+      ctx.fill();
+      ctx.strokeStyle = isActive ? '#5599cc' : '#3366aa';
+      ctx.lineWidth = isActive ? 2 : 1;
+      ctx.stroke();
 
-    // Slope angle label
-    const angleDeg = Math.atan2(hEnd - hStart, offEnd - offStart) * 180 / Math.PI;
-    const midPx    = this._elev2px((offStart + offEnd) / 2, (hStart + hEnd) / 2);
-    ctx.fillStyle = '#88aacc'; ctx.font = 'bold 11px sans-serif';
-    ctx.fillText(angleDeg.toFixed(1) + '\u00b0', midPx.x + 4, midPx.y - 6);
+      // Boundary dashed lines
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = isActive ? '#88bbdd' : '#446688';
+      ctx.lineWidth = 1;
+      if (offStart > 0.001) {
+        const topS = this._elev2px(offStart, floorH);
+        const botS = this._elev2px(offStart, 0);
+        ctx.beginPath(); ctx.moveTo(topS.x, topS.y); ctx.lineTo(botS.x, botS.y); ctx.stroke();
+      }
+      if (offEnd < wallLen - 0.001) {
+        const topE = this._elev2px(offEnd, floorH);
+        const botE = this._elev2px(offEnd, 0);
+        ctx.beginPath(); ctx.moveTo(topE.x, topE.y); ctx.lineTo(botE.x, botE.y); ctx.stroke();
+      }
+      ctx.setLineDash([]);
 
-    // ── Drag handles ─────────────────────────────────────────────────────────
-    this._drawHandle(ctx, bHs, this._dragging === 'heightStart', 'height');
-    this._drawHandle(ctx, bHe, this._dragging === 'heightEnd',   'height');
-    this._drawHandle(ctx, bOs, this._dragging === 'offsetStart', 'offset');
-    this._drawHandle(ctx, bOe, this._dragging === 'offsetEnd',   'offset');
+      // Slope angle
+      const angleDeg = Math.atan2(hE - hS, offEnd - offStart) * 180 / Math.PI;
+      const midPx    = this._elev2px((offStart + offEnd) / 2, (hS + hE) / 2);
+      ctx.fillStyle = isActive ? '#88aacc' : '#446688';
+      ctx.font = (isActive ? 'bold ' : '') + '11px sans-serif';
+      ctx.fillText(angleDeg.toFixed(1) + '\u00b0', midPx.x + 4, midPx.y - 6);
+
+      // Handles — only for active bevel
+      if (isActive) {
+        this._drawHandle(ctx, bHs, this._dragging === 'heightStart', 'height');
+        this._drawHandle(ctx, bHe, this._dragging === 'heightEnd',   'height');
+        this._drawHandle(ctx, bOs, this._dragging === 'offsetStart', 'offset');
+        this._drawHandle(ctx, bOe, this._dragging === 'offsetEnd',   'offset');
+      }
+    });
   }
 
   _drawHandle(ctx, pos, active, kind) {
@@ -469,7 +626,7 @@ export class SideElevationEditor {
     ctx.fill(); ctx.lineWidth = 2; ctx.stroke();
   }
 
-  _updateLabels(d) {
+  _updateLabels({ wallLen, floorH }) {
     const labels = this._labelContainer;
     if (!labels) return;
     labels.innerHTML = '';
@@ -495,13 +652,17 @@ export class SideElevationEditor {
       labels.appendChild(div);
     };
 
-    const { wallLen, hStart, hEnd, offStart, offEnd } = d;
-    addLabel(offStart, hStart, hStart.toFixed(2) + ' m', '#00ddff', false);
-    addLabel(offEnd,   hEnd,   hEnd.toFixed(2)   + ' m', '#00ddff', true);
-    if (offStart > 0.01)
-      addLabel(offStart, 0, offStart.toFixed(2) + ' m \u2192', '#ffaa00', false);
-    if (offEnd < wallLen - 0.01)
-      addLabel(offEnd, 0, '\u2190 ' + offEnd.toFixed(2) + ' m', '#ffaa00', true);
+    const bevel = this._getActiveBevel();
+    if (bevel) {
+      const offStart = bevel.offsetStart;
+      const offEnd   = bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen;
+      addLabel(offStart, bevel.heightStart, bevel.heightStart.toFixed(2) + ' m', '#00ddff', false);
+      addLabel(offEnd,   bevel.heightEnd,   bevel.heightEnd.toFixed(2)   + ' m', '#00ddff', true);
+      if (offStart > 0.01)
+        addLabel(offStart, 0, offStart.toFixed(2) + ' m \u2192', '#ffaa00', false);
+      if (offEnd < wallLen - 0.01)
+        addLabel(offEnd, 0, '\u2190 ' + offEnd.toFixed(2) + ' m', '#ffaa00', true);
+    }
     addLabel(wallLen / 2, 0, 'L = ' + wallLen.toFixed(2) + ' m', '#888888', false);
   }
 
@@ -509,22 +670,45 @@ export class SideElevationEditor {
 
   _onMouseDown(e) {
     if (e.button !== 0) return;
-    const d = this._getWallData();
-    if (d.wallLen < 0.01) return;
+    const { wallLen, floorH } = this._getWallBase();
+    if (wallLen < 0.01) return;
 
     const { x: px, y: py } = this._canvasMousePos(e);
     const r = HANDLE_HIT_RADIUS * HANDLE_HIT_MULTIPLIER;
 
-    const handles = [
-      { name: 'heightStart', pos: this._elev2px(d.offStart, d.hStart) },
-      { name: 'heightEnd',   pos: this._elev2px(d.offEnd,   d.hEnd)   },
-      { name: 'offsetStart', pos: this._elev2px(d.offStart, 0)        },
-      { name: 'offsetEnd',   pos: this._elev2px(d.offEnd,   0)        },
-    ];
+    // 1. Check handles of the active bevel first
+    const active = this._getActiveBevel();
+    if (active) {
+      const offStart = active.offsetStart;
+      const offEnd   = active.offsetEnd !== null ? active.offsetEnd : wallLen;
+      const handles = [
+        { name: 'heightStart', pos: this._elev2px(offStart, active.heightStart) },
+        { name: 'heightEnd',   pos: this._elev2px(offEnd,   active.heightEnd)   },
+        { name: 'offsetStart', pos: this._elev2px(offStart, 0)                  },
+        { name: 'offsetEnd',   pos: this._elev2px(offEnd,   0)                  },
+      ];
+      for (const h of handles) {
+        if (Math.hypot(px - h.pos.x, py - h.pos.y) < r) {
+          this._dragging = h.name;
+          return;
+        }
+      }
+    }
 
-    for (const h of handles) {
-      if (Math.hypot(px - h.pos.x, py - h.pos.y) < r) {
-        this._dragging = h.name;
+    // 2. Check if click is inside a bevel region → select that bevel
+    const ev = this._px2elev(px, py);
+    const bevels = this._getBevelsForWall();
+    for (let idx = 0; idx < bevels.length; idx++) {
+      const bv = bevels[idx];
+      const oS = bv.offsetStart;
+      const oE = bv.offsetEnd !== null ? bv.offsetEnd : wallLen;
+      if (ev.x >= oS && ev.x <= oE) {
+        if (idx !== this._activeBevelIdx) {
+          this._activeBevelIdx = idx;
+          this._updateBevelLabel();
+          this._updateTitle();
+          this.redraw();
+        }
         return;
       }
     }
@@ -532,14 +716,16 @@ export class SideElevationEditor {
 
   _onMouseMove(e) {
     if (!this._dragging) return;
-    const d = this._getWallData();
-    if (d.wallLen < 0.01) return;
+    const { wallLen } = this._getWallBase();
+    if (wallLen < 0.01) return;
 
     const { x: px, y: py } = this._canvasMousePos(e);
     const ev = this._px2elev(px, py);
 
     const bevel = this._getOrCreateBevel();
     if (!bevel) return;
+
+    const offEnd = bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen;
 
     switch (this._dragging) {
       case 'heightStart':
@@ -548,15 +734,12 @@ export class SideElevationEditor {
       case 'heightEnd':
         bevel.heightEnd = Math.max(MIN_BEVEL_HEIGHT, ev.y);
         break;
-      case 'offsetStart': {
-        const resolvedEnd = d.offEnd;
-        bevel.offsetStart = Math.max(0, Math.min(ev.x, resolvedEnd - MIN_BEVEL_WIDTH));
+      case 'offsetStart':
+        bevel.offsetStart = Math.max(0, Math.min(ev.x, offEnd - MIN_BEVEL_WIDTH));
         break;
-      }
       case 'offsetEnd': {
-        const newOff = Math.max(d.offStart + MIN_BEVEL_WIDTH, Math.min(ev.x, d.wallLen));
-        // Snap back to null (full-length) when dragged to the wall end
-        bevel.offsetEnd = Math.abs(newOff - d.wallLen) < SNAP_TO_END_THRESHOLD ? null : newOff;
+        const newOff = Math.max(bevel.offsetStart + MIN_BEVEL_WIDTH, Math.min(ev.x, wallLen));
+        bevel.offsetEnd = Math.abs(newOff - wallLen) < SNAP_TO_END_THRESHOLD ? null : newOff;
         break;
       }
     }

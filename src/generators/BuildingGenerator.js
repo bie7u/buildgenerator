@@ -71,13 +71,15 @@ export class BuildingGenerator {
       this._generateElevator(floor, floorBaseY, group);
       this._generateStairs(floor, floorBaseY, group);
 
-      // Ceiling slab — cut holes defined on this floor
-      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group);
+      // Ceiling slab — cut floor holes AND bevel regions so the sloped wall
+      // top-face (already part of the wall extrusion cap) acts as the ceiling
+      const bevelCuts = this._computeBevelCuts(floorContour, floor, building.wallThickness);
+      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, bevelCuts);
     }
   }
 
   // ── Floor slabs ───────────────────────────────────────────────────────────
-  _addSlab(contour, yTop, floorHoles, group) {
+  _addSlab(contour, yTop, floorHoles, group, bevelCuts = []) {
     if (contour.length < 3) return;
 
     // Build the shape in the XY plane.
@@ -107,6 +109,11 @@ export class BuildingGenerator {
       }
     }
 
+    // Cut bevel regions — the sloped wall top-face acts as the ceiling there
+    for (const cut of bevelCuts) {
+      shape.holes.push(cut);
+    }
+
     const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.15, bevelEnabled: false });
     geo.rotateX(-Math.PI / 2);
     const mesh = new THREE.Mesh(geo, this.slabMat);
@@ -133,35 +140,26 @@ export class BuildingGenerator {
       const ndx = dx / wallLen;
       const ndz = dz / wallLen;
 
-      // Resolve bevel parameters
-      const bevel = floor.wallBevels.find(b => b.wallIndex === i);
-      const hStart   = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightStart)  : floorH;
-      const hEnd     = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightEnd)    : floorH;
-      const offStart = bevel ? Math.max(0, bevel.offsetStart)                : 0;
-      const offEnd   = bevel
-        ? Math.min(wallLen, bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen)
-        : wallLen;
+      // All bevels for this wall segment, sorted by offsetStart
+      const bevels = floor.wallBevels
+        .filter(b => b.wallIndex === i)
+        .sort((a, b) => a.offsetStart - b.offsetStart);
+
+      // Build the piecewise top-profile for this wall
+      const topProfile = this._computeTopProfile(bevels, wallLen, floorH);
 
       // Build wall cross-section shape in local XY (X = along wall, Y = up).
-      // The bevel "notch" only spans from offStart to offEnd;
-      // outside that region the wall stands at full floorH.
+      // Bottom edge: left→right. Top edge: traverse profile right→left.
       const shape = new THREE.Shape();
       shape.moveTo(0, 0);
       shape.lineTo(wallLen, 0);
-      shape.lineTo(wallLen, floorH);
-      if (bevel && offEnd < wallLen - 0.001) shape.lineTo(offEnd, floorH);
-      if (bevel) {
-        shape.lineTo(offEnd,   hEnd);
-        shape.lineTo(offStart, hStart);
+      for (let j = topProfile.length - 1; j >= 0; j--) {
+        shape.lineTo(topProfile[j].x, topProfile[j].h);
       }
-      if (bevel && offStart > 0.001) shape.lineTo(offStart, floorH);
-      shape.lineTo(0, floorH);
       shape.closePath();
 
-      // Collect holes from windows/doors (clamp to local bevel height)
-      shape.holes = this._getWallHolesForBevel(
-        floor, i, hStart, hEnd, offStart, offEnd, wallLen, floorH
-      );
+      // Collect window/door holes, clamped to the top profile
+      shape.holes = this._getWallHoles(floor, i, topProfile, wallLen, floorH);
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
 
@@ -182,16 +180,74 @@ export class BuildingGenerator {
     }
   }
 
-  /** Get wall opening holes, clamped to the local top height at each x position. */
-  _getWallHolesForBevel(floor, wallIndex, hStart, hEnd, offStart, offEnd, wallLen, floorH) {
+  /**
+   * Compute a piecewise-linear top-profile for a wall with zero or more bevels.
+   * Returns an array of { x, h } sorted by x, from x=0 to x=wallLen.
+   *
+   * The profile contains vertical "snaps" (two consecutive points at the same x)
+   * at bevel boundaries so the wall rises instantly back to floorH.
+   * Between bevel regions the wall stands at floorH.
+   */
+  _computeTopProfile(bevels, wallLen, floorH) {
+    if (bevels.length === 0) {
+      return [{ x: 0, h: floorH }, { x: wallLen, h: floorH }];
+    }
+
+    const pts = [];
+    let prevEnd = 0; // where the last bevel (or wall start) ended
+
+    for (const bv of bevels) {
+      const oStart = Math.max(0, Math.min(wallLen, bv.offsetStart));
+      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, bv.offsetEnd !== null ? bv.offsetEnd : wallLen));
+      const hS = Math.max(MIN_WALL_HEIGHT, bv.heightStart);
+      const hE = Math.max(MIN_WALL_HEIGHT, bv.heightEnd);
+
+      // Gap between previous end and this bevel start: wall stands at floorH
+      if (oStart > prevEnd + 0.001) {
+        if (prevEnd > 0.001) {
+          // Snap back to floorH right at the end of the previous bevel
+          pts.push({ x: prevEnd, h: floorH });
+        } else {
+          // No previous bevel: start of wall is at full height
+          pts.push({ x: 0, h: floorH });
+        }
+        // Flat section at full height up to this bevel's start
+        pts.push({ x: oStart, h: floorH });
+      }
+
+      // The bevel segment
+      pts.push({ x: oStart, h: hS });
+      pts.push({ x: oEnd,   h: hE });
+      prevEnd = oEnd;
+    }
+
+    // Trailing full-height section after the last bevel (if any)
+    if (prevEnd < wallLen - 0.001) {
+      pts.push({ x: prevEnd,  h: floorH }); // instant snap back
+      pts.push({ x: wallLen,  h: floorH });
+    }
+
+    return pts;
+  }
+
+  /** Interpolate the wall top-profile height at a given x. */
+  _topProfileHeightAt(topProfile, x) {
+    for (let i = 0; i < topProfile.length - 1; i++) {
+      const a = topProfile[i], b = topProfile[i + 1];
+      if (x >= a.x - 0.0001 && x <= b.x + 0.0001) {
+        const span = b.x - a.x;
+        if (span < 0.0001) return Math.min(a.h, b.h);
+        return a.h + (b.h - a.h) * ((x - a.x) / span);
+      }
+    }
+    return topProfile[topProfile.length - 1]?.h ?? 0;
+  }
+
+  /** Get wall opening holes, clamped to the piecewise top profile. */
+  _getWallHoles(floor, wallIndex, topProfile, wallLen, floorH) {
     const holes = [];
 
-    // Height of the wall top at a given x position
-    const maxYAtX = (x) => {
-      if (x <= offStart || x >= offEnd) return floorH;
-      const t = (x - offStart) / (offEnd - offStart);
-      return hStart + t * (hEnd - hStart);
-    };
+    const maxYAtX = (x) => this._topProfileHeightAt(topProfile, x);
 
     for (const win of floor.windows) {
       if (win.wallIndex !== wallIndex) continue;
@@ -229,6 +285,52 @@ export class BuildingGenerator {
     }
 
     return holes;
+  }
+
+  /**
+   * For each bevel on this floor, compute a rectangular hole in the slab
+   * shape-space so the sloped wall top-face (already in the extrusion cap)
+   * becomes visible as the ceiling in the bevel region.
+   *
+   * Slab shape-space: shape_x = world_x, shape_y = -world_z
+   * Inward normal in world XZ: (ndz, 0, -ndx)  →  shape (ndz, ndx)
+   */
+  _computeBevelCuts(contour, floor, wallThick) {
+    const cuts = [];
+    const n = contour.length;
+
+    for (const bevel of floor.wallBevels) {
+      const i = bevel.wallIndex;
+      if (i >= n) continue;
+
+      const p1 = contour[i];
+      const p2 = contour[(i + 1) % n];
+      const dx = p2.x - p1.x, dz = p2.y - p1.y;
+      const wallLen = Math.sqrt(dx * dx + dz * dz);
+      if (wallLen < 0.01) continue;
+
+      const ndx = dx / wallLen, ndz = dz / wallLen;
+
+      const oStart = Math.max(0, Math.min(wallLen, bevel.offsetStart));
+      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen));
+
+      // Four corners in slab shape-space (outer face → inward by wallThick)
+      // A = outer at oStart, B = outer at oEnd, C = inner at oEnd, D = inner at oStart
+      const ax = p1.x + oStart * ndx,        ay = -(p1.y + oStart * ndz);
+      const bx = p1.x + oEnd   * ndx,        by = -(p1.y + oEnd   * ndz);
+      const cx = bx + ndz * wallThick,        cy = by + ndx * wallThick;
+      const dxx = ax + ndz * wallThick,       dy = ay + ndx * wallThick;
+
+      const path = new THREE.Path();
+      path.moveTo(ax, ay);
+      path.lineTo(dxx, dy);   // inward at start
+      path.lineTo(cx,  cy);   // inward at end
+      path.lineTo(bx,  by);   // outer at end
+      path.closePath();
+      cuts.push(path);
+    }
+
+    return cuts;
   }
 
   // ── Internal walls ────────────────────────────────────────────────────────
