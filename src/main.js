@@ -165,14 +165,15 @@ function init() {
 
   app.sceneManager.startLoop();
 
-  // Toolbar: elevation button
+  // Toolbar: elevation button — always opens for the currently-selected floor
   const btnElev = document.getElementById('btn-elevation');
   if (btnElev) {
     btnElev.addEventListener('click', () => {
       if (app.mode === 'elevation') {
         app.setMode('2d');
       } else {
-        app.setMode('elevation');
+        // Use the floor that is currently active in the 2D editor
+        app.openElevation(app.currentFloorIndex, app.elevationWallIndex);
       }
     });
   }

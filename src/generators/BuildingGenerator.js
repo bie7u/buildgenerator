@@ -133,31 +133,39 @@ export class BuildingGenerator {
       const ndx = dx / wallLen;
       const ndz = dz / wallLen;
 
-      // Determine top heights (may be bevelled)
+      // Resolve bevel parameters
       const bevel = floor.wallBevels.find(b => b.wallIndex === i);
-      const hStart = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightStart) : floorH;
-      const hEnd   = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightEnd)   : floorH;
+      const hStart   = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightStart)  : floorH;
+      const hEnd     = bevel ? Math.max(MIN_WALL_HEIGHT, bevel.heightEnd)    : floorH;
+      const offStart = bevel ? Math.max(0, bevel.offsetStart)                : 0;
+      const offEnd   = bevel
+        ? Math.min(wallLen, bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen)
+        : wallLen;
 
-      // Build wall shape in local XY (X = along wall, Y = up)
+      // Build wall cross-section shape in local XY (X = along wall, Y = up).
+      // The bevel "notch" only spans from offStart to offEnd;
+      // outside that region the wall stands at full floorH.
       const shape = new THREE.Shape();
       shape.moveTo(0, 0);
       shape.lineTo(wallLen, 0);
-      shape.lineTo(wallLen, hEnd);
-      shape.lineTo(0, hStart);
+      shape.lineTo(wallLen, floorH);
+      if (bevel && offEnd < wallLen - 0.001) shape.lineTo(offEnd, floorH);
+      if (bevel) {
+        shape.lineTo(offEnd,   hEnd);
+        shape.lineTo(offStart, hStart);
+      }
+      if (bevel && offStart > 0.001) shape.lineTo(offStart, floorH);
+      shape.lineTo(0, floorH);
       shape.closePath();
 
-      // Collect holes from windows and doors on this wall segment
-      // (clamp holes to whichever height applies at that x position)
-      const holes = this._getWallHolesForBevel(floor, i, hStart, hEnd, wallLen);
-      shape.holes = holes;
+      // Collect holes from windows/doors (clamp to local bevel height)
+      shape.holes = this._getWallHolesForBevel(
+        floor, i, hStart, hEnd, offStart, offEnd, wallLen, floorH
+      );
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
 
-      // Transform matrix:
-      // Local X → wall direction (ndx, 0, ndz)
-      // Local Y → up (0, 1, 0)
-      // Local Z → extrusion = inward normal = right perp of wall dir for CCW: (ndz, 0, -ndx)
-      // Translation: (P1.x, floorBaseY, P1.y)
+      // Transform: local X → wall direction, local Y → up, local Z → inward normal
       const m = new THREE.Matrix4();
       m.set(
         ndx,  0,  ndz,  p1.x,
@@ -174,11 +182,16 @@ export class BuildingGenerator {
     }
   }
 
-  /** Get wall opening holes, clamped to the local bevel height at each x position. */
-  _getWallHolesForBevel(floor, wallIndex, hStart, hEnd, wallLen) {
+  /** Get wall opening holes, clamped to the local top height at each x position. */
+  _getWallHolesForBevel(floor, wallIndex, hStart, hEnd, offStart, offEnd, wallLen, floorH) {
     const holes = [];
 
-    const maxYAtX = (x) => hStart + (hEnd - hStart) * (x / wallLen);
+    // Height of the wall top at a given x position
+    const maxYAtX = (x) => {
+      if (x <= offStart || x >= offEnd) return floorH;
+      const t = (x - offStart) / (offEnd - offStart);
+      return hStart + t * (hEnd - hStart);
+    };
 
     for (const win of floor.windows) {
       if (win.wallIndex !== wallIndex) continue;
