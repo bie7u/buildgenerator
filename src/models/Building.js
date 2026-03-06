@@ -21,6 +21,39 @@ export class Building {
     return this.floors[index] || null;
   }
 
+  /**
+   * Returns the effective contour for a given floor:
+   * the floor's own override if set, otherwise the building's base contour.
+   */
+  getFloorContour(floorIndex) {
+    const floor = this.floors[floorIndex];
+    if (floor && floor.contour && floor.contour.length >= 3) {
+      return floor.contour;
+    }
+    return this.contour;
+  }
+
+  /** Normalize winding of building base contour AND all per-floor overrides. */
+  normalizeAllContourWindings() {
+    this.normalizeContourWinding();
+    for (const floor of this.floors) {
+      if (floor.contour && floor.contour.length >= 3) {
+        Building._normalizePoints(floor.contour);
+      }
+    }
+  }
+
+  /** In-place CCW-on-screen winding normalization for an arbitrary point array. */
+  static _normalizePoints(pts) {
+    let area = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      area += pts[i].x * pts[j].y;
+      area -= pts[j].x * pts[i].y;
+    }
+    if (area / 2 > 0) pts.reverse();
+  }
+
   /** Signed area in XZ plane. Negative = CCW-on-screen (what we want). */
   getContourSignedArea() {
     const n = this.contour.length;

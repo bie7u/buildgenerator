@@ -98,7 +98,7 @@ export class UIManager {
     const hintMap = {
       'select':         'Click to select elements. Drag vertices or elements to reposition.',
       'move':           'Click and drag any element to move it. Wall elements snap to the nearest wall.',
-      'draw-contour':   'Click to add points. Click near first point or double-click to close.',
+      'draw-contour':   'Floor 0: draws building base contour. Floor 1+: draws this floor\'s custom contour. Double-click or click near first point to close.',
       'draw-wall':      'Click to place wall start, click again for end.',
       'add-window':     'Click on an outer wall segment to add a window.',
       'add-door':       'Click on an outer wall segment to add a door.',
@@ -181,9 +181,27 @@ export class UIManager {
     });
 
     document.getElementById('btn-clear-contour').addEventListener('click', () => {
-      app.building.contour = [];
+      const floor = app.building.getFloor(app.currentFloorIndex);
+      if (app.currentFloorIndex > 0 && floor && floor.contour) {
+        // Clear only the floor-level override
+        floor.contour = null;
+      } else {
+        // Clear the building base contour
+        app.building.contour = [];
+      }
       app.editor.redraw();
       this.updateBuildingInfo();
+    });
+
+    document.getElementById('btn-reset-floor-contour').addEventListener('click', () => {
+      const floor = app.building.getFloor(app.currentFloorIndex);
+      if (floor && floor.contour) {
+        floor.contour = null;
+        app.editor.selectedElement = null;
+        this.clearProperties();
+        app.editor.redraw();
+        this.updateBuildingInfo();
+      }
     });
 
     document.getElementById('btn-reset-all').addEventListener('click', () => {
@@ -191,6 +209,7 @@ export class UIManager {
       for (const b of app.buildings) {
         b.contour = [];
         for (const floor of b.floors) {
+          floor.contour = null;
           floor.internalWalls = [];
           floor.windows = [];
           floor.doors = [];
@@ -223,7 +242,8 @@ export class UIManager {
   // ── Floor selector ────────────────────────────────────────────────────────
   /** Returns the display label for a floor option (shared formatting helper). */
   _floorLabel(floor, index) {
-    return `Floor ${index + 1}  (${floor.height.toFixed(1)}m)`;
+    const marker = (floor.contour && floor.contour.length >= 3) ? ' ★' : '';
+    return `Floor ${index + 1}  (${floor.height.toFixed(1)}m)${marker}`;
   }
 
   _updateFloorSelector() {
@@ -637,13 +657,25 @@ export class UIManager {
   // ── Building info ─────────────────────────────────────────────────────────
   updateBuildingInfo() {
     const b = this.app.building;
-    const floor = b.getFloor(this.app.currentFloorIndex);
+    const fi = this.app.currentFloorIndex;
+    const floor = b.getFloor(fi);
+    const hasFloorOverride = floor && floor.contour && floor.contour.length >= 3;
+
     document.getElementById('info-buildings').textContent = this.app.buildings.length;
     document.getElementById('info-floors').textContent = b.floors.length;
-    document.getElementById('info-contour').textContent = b.contour.length;
+    // Show the effective contour point count for the current floor
+    const effectiveContour = b.getFloorContour(fi);
+    document.getElementById('info-contour').textContent =
+      effectiveContour.length + (hasFloorOverride ? ' ★' : '');
     document.getElementById('info-walls').textContent = floor ? floor.internalWalls.length : 0;
     document.getElementById('info-windows').textContent = floor ? floor.windows.length : 0;
     document.getElementById('info-doors').textContent = floor ? floor.doors.length : 0;
+
+    // Show/hide the "Reset floor contour" button
+    const resetBtn = document.getElementById('btn-reset-floor-contour');
+    if (resetBtn) {
+      resetBtn.style.display = (hasFloorOverride && fi > 0) ? '' : 'none';
+    }
 
     // Also refresh floor selector text (heights may have changed)
     const sel = document.getElementById('floor-select');

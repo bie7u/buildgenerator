@@ -86,7 +86,7 @@ const app = {
       return;
     }
     for (const b of this.buildings) {
-      if (b.contour.length >= 3) b.normalizeContourWinding();
+      if (b.contour.length >= 3) b.normalizeAllContourWindings();
     }
     this.generator.generateAll(this.buildings);
     this.setMode('3d');

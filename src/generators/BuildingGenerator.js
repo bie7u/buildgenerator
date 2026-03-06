@@ -53,27 +53,27 @@ export class BuildingGenerator {
     }
 
     // Ground floor slab (bottom of building) — no floor holes
-    this._addSlab(building, 0, null, group);
+    this._addSlab(building.getFloorContour(0), 0, null, group);
 
     for (let fi = 0; fi < building.floors.length; fi++) {
       const floor = building.floors[fi];
       const floorBaseY = floorBases[fi];
+      const floorContour = building.getFloorContour(fi);
 
-      this._generateExternalWalls(building, floor, floorBaseY, group);
+      this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group);
       this._generateInternalWalls(building, floor, floorBaseY, group);
-      this._generateWindowPanes(building, floor, floorBaseY, group);
-      this._generateBalconies(building, floor, floorBaseY, group);
+      this._generateWindowPanes(floorContour, floor, floorBaseY, group);
+      this._generateBalconies(floorContour, floor, floorBaseY, group);
       this._generateElevator(floor, floorBaseY, group);
       this._generateStairs(floor, floorBaseY, group);
 
       // Ceiling slab — cut holes defined on this floor
-      this._addSlab(building, floorBaseY + floor.height, floor.floorHoles, group);
+      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group);
     }
   }
 
   // ── Floor slabs ───────────────────────────────────────────────────────────
-  _addSlab(building, yTop, floorHoles, group) {
-    const contour = building.contour;
+  _addSlab(contour, yTop, floorHoles, group) {
     if (contour.length < 3) return;
 
     // Build the shape in the XY plane.
@@ -113,11 +113,9 @@ export class BuildingGenerator {
   }
 
   // ── External walls ────────────────────────────────────────────────────────
-  _generateExternalWalls(building, floor, floorBaseY, group) {
-    const contour = building.contour;
+  _generateExternalWalls(contour, wallThick, floor, floorBaseY, group) {
     const n = contour.length;
     const floorH = floor.height;
-    const wallThick = building.wallThickness;
 
     for (let i = 0; i < n; i++) {
       const p1 = contour[i];
@@ -229,8 +227,7 @@ export class BuildingGenerator {
   }
 
   // ── Window panes ──────────────────────────────────────────────────────────
-  _generateWindowPanes(building, floor, floorBaseY, group) {
-    const contour = building.contour;
+  _generateWindowPanes(contour, floor, floorBaseY, group) {
     const n = contour.length;
 
     for (const win of floor.windows) {
@@ -258,8 +255,7 @@ export class BuildingGenerator {
   }
 
   // ── Balconies ─────────────────────────────────────────────────────────────
-  _generateBalconies(building, floor, floorBaseY, group) {
-    const contour = building.contour;
+  _generateBalconies(contour, floor, floorBaseY, group) {
     const n = contour.length;
 
     for (const bal of floor.balconies) {

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GridSystem } from '../GridSystem.js';
+import { Building } from '../models/Building.js';
 import { Wall } from '../models/Wall.js';
 import { WindowElement } from '../models/WindowElement.js';
 import { Door } from '../models/Door.js';
@@ -181,6 +182,32 @@ export class FloorPlanEditor {
     return this.building.getFloor(this.currentFloorIndex);
   }
 
+  /**
+   * The contour that is currently active for editing and display.
+   * - Floor 0: always building.contour (the shared base)
+   * - Floor N>0 with override: floor.contour
+   * - Floor N>0 without override: building.contour (inherited)
+   */
+  get activeContour() {
+    return this.building.getFloorContour(this.currentFloorIndex);
+  }
+
+  /**
+   * Save a drawn contour to the right place.
+   * Floor 0 → building.contour (base shared by floors that have no override).
+   * Floor N>0 → floor.contour (per-floor override).
+   */
+  _setActiveContour(points) {
+    if (this.currentFloorIndex === 0 || !this.currentFloor) {
+      this.building.contour = points;
+      this.building.normalizeContourWinding();
+    } else {
+      const floor = this.currentFloor;
+      floor.contour = points;
+      Building._normalizePoints(floor.contour);
+    }
+  }
+
   // ── Mouse events ──────────────────────────────────────────────────────────
   onMouseDown(e) {
     if (this.app.mode !== '2d') return;
@@ -303,8 +330,7 @@ export class FloorPlanEditor {
   }
 
   _closeContour() {
-    this.building.contour = this._previewPoints.map(p => p.clone());
-    this.building.normalizeContourWinding();
+    this._setActiveContour(this._previewPoints.map(p => p.clone()));
     this._isDrawingContour = false;
     this._previewPoints = [];
     this.app.ui.updateBuildingInfo();
@@ -369,7 +395,12 @@ export class FloorPlanEditor {
     }
 
     const { wallIndex, offset } = result;
-    const wallLen = this.building.getWallLength(wallIndex);
+    // Compute wall length from the active (per-floor) contour
+    const ac = this.activeContour;
+    const wn = ac.length;
+    const wallLen = (wn >= 2 && wallIndex < wn)
+      ? ac[wallIndex].distanceTo(ac[(wallIndex + 1) % wn])
+      : 0;
     const floor = this.currentFloor;
 
     if (type === 'window') {
@@ -591,7 +622,13 @@ export class FloorPlanEditor {
     const floor = this.currentFloor;
 
     if (dt.type === 'contour-vertex') {
-      this.building.contour[dt.index].copy(pos);
+      // Auto-create a per-floor contour override the first time a vertex is
+      // dragged on a floor > 0 that doesn't yet have its own contour.
+      if (this.currentFloorIndex > 0 && floor && !floor.contour) {
+        floor.contour = this.building.contour.map(p => p.clone());
+        Building._normalizePoints(floor.contour);
+      }
+      this.activeContour[dt.index].copy(pos);
     } else if (dt.type === 'wall-start' && floor) {
       floor.internalWalls[dt.wallIndex].start.copy(pos);
     } else if (dt.type === 'wall-end' && floor) {
@@ -762,16 +799,17 @@ export class FloorPlanEditor {
   }
 
   _findNearestContourVertex(pos, radius) {
+    const contour = this.activeContour;
     let best = -1, bestDist = radius;
-    for (let i = 0; i < this.building.contour.length; i++) {
-      const d = pos.distanceTo(this.building.contour[i]);
+    for (let i = 0; i < contour.length; i++) {
+      const d = pos.distanceTo(contour[i]);
       if (d < bestDist) { bestDist = d; best = i; }
     }
     return best;
   }
 
   _findNearestWallSegment(pos, maxDist) {
-    const contour = this.building.contour;
+    const contour = this.activeContour;
     const n = contour.length;
     if (n < 2) return null;
 
@@ -809,7 +847,7 @@ export class FloorPlanEditor {
   }
 
   _getWallWorldPositions(wallIndex) {
-    const contour = this.building.contour;
+    const contour = this.activeContour;
     const n = contour.length;
     if (n < 2 || wallIndex >= n) return null;
     const p1 = contour[wallIndex];
@@ -862,19 +900,35 @@ export class FloorPlanEditor {
       this.sm.editGroup.add(makeCircle(cx, cz, 0.2, 0x556655));
     }
 
-    // Now draw the active building
-    const c = this.building.contour;
+    // Active building — determine what to show
+    const base = this.building.contour;
+    const floor = this.currentFloor;
+    const hasFloorOverride = floor && floor.contour && floor.contour.length >= 3;
+    const c = hasFloorOverride ? floor.contour : base;
+
+    if (base.length === 0 && !hasFloorOverride) return;
+
+    // When a floor has its own contour override, show the building base as a
+    // dim grey ghost so the user can see how the shape changed.
+    if (hasFloorOverride && base.length >= 2) {
+      if (this.ghostFill && base.length >= 3) {
+        this.sm.editGroup.add(makeFilledContour(base, 0x445566, 0.10));
+      }
+      this.sm.editGroup.add(makeLineLoop(base, 0x557799));
+    }
+
     if (c.length === 0) return;
 
-    // Ghost fill — semi-transparent floor area overlay
+    // Ghost fill for the active/effective contour
     if (this.ghostFill && c.length >= 3) {
-      const fill = makeFilledContour(c, 0xaaccff, 0.18);
+      const fill = makeFilledContour(c, hasFloorOverride ? 0xaaffcc : 0xaaccff, 0.18);
       this.sm.editGroup.add(fill);
     }
 
     // Contour lines
     if (c.length >= 2) {
-      const loop = makeLineLoop(c, 0xffcc00);
+      const lineColor = hasFloorOverride ? 0x44ffaa : 0xffcc00;
+      const loop = makeLineLoop(c, lineColor);
       this.sm.editGroup.add(loop);
     }
 
@@ -885,7 +939,7 @@ export class FloorPlanEditor {
         this._dragTarget?.type === 'contour-vertex' &&
         this._dragTarget?.index === i
       );
-      const color = isSelected ? 0x44aaff : 0xff8800;
+      const color = isSelected ? 0x44aaff : (hasFloorOverride ? 0x44ff88 : 0xff8800);
       const circle = makeCircle(c[i].x, c[i].y, 0.15, color);
       this.sm.editGroup.add(circle);
     }
@@ -905,7 +959,7 @@ export class FloorPlanEditor {
           new THREE.Vector2(mx, mz),
           new THREE.Vector2(mx + nx * tickLen, mz + nz * tickLen)
         ];
-        const tick = makeLine(tickPts, 0x888844);
+        const tick = makeLine(tickPts, hasFloorOverride ? 0x448844 : 0x888844);
         this.sm.editGroup.add(tick);
       }
     }

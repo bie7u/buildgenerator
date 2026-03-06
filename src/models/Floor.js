@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { Wall } from './Wall.js';
 import { WindowElement } from './WindowElement.js';
 import { Door } from './Door.js';
@@ -10,6 +11,7 @@ export class Floor {
   constructor(index, height = 2.7) {
     this.index = index;
     this.height = height;
+    this.contour = null;       // THREE.Vector2[] | null — per-floor override; null = use building base
     this.internalWalls = [];   // Wall[]
     this.windows = [];         // WindowElement[]
     this.doors = [];           // Door[]
@@ -23,6 +25,7 @@ export class Floor {
     return {
       index: this.index,
       height: this.height,
+      contour: this.contour ? this.contour.map(p => ({ x: p.x, y: p.y })) : null,
       internalWalls: this.internalWalls.map(w => w.toJSON()),
       windows: this.windows.map(w => w.toJSON()),
       doors: this.doors.map(d => d.toJSON()),
@@ -35,6 +38,9 @@ export class Floor {
 
   static fromJSON(data, index) {
     const f = new Floor(index, data.height);
+    if (data.contour && data.contour.length >= 3) {
+      f.contour = data.contour.map(p => new THREE.Vector2(p.x, p.y));
+    }
     f.internalWalls = (data.internalWalls || []).map(w => Wall.fromJSON(w));
     f.windows = (data.windows || []).map(w => WindowElement.fromJSON(w));
     f.doors = (data.doors || []).map(d => Door.fromJSON(d));
