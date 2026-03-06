@@ -7,6 +7,7 @@ import { Elevator } from './Elevator.js';
 import { Stairs } from './Stairs.js';
 import { FloorHole } from './FloorHole.js';
 import { WallBevel } from './WallBevel.js';
+import { CeilingBevel } from './CeilingBevel.js';
 
 export class Floor {
   constructor(index, height = 2.7) {
@@ -21,6 +22,7 @@ export class Floor {
     this.stairs = null;        // Stairs | null
     this.floorHoles = [];      // FloorHole[]
     this.wallBevels = [];      // WallBevel[] — per-segment slope overrides
+    this.ceilingBevels = [];   // CeilingBevel[] — per-segment sloped ceiling panels
   }
 
   toJSON() {
@@ -36,6 +38,7 @@ export class Floor {
       stairs: this.stairs ? this.stairs.toJSON() : null,
       floorHoles: this.floorHoles.map(h => h.toJSON()),
       wallBevels: this.wallBevels.map(b => b.toJSON()),
+      ceilingBevels: this.ceilingBevels.map(b => b.toJSON()),
     };
   }
 
@@ -52,6 +55,7 @@ export class Floor {
     f.stairs = data.stairs ? Stairs.fromJSON(data.stairs) : null;
     f.floorHoles = (data.floorHoles || []).map(h => FloorHole.fromJSON(h));
     f.wallBevels = (data.wallBevels || []).map(b => WallBevel.fromJSON(b));
+    f.ceilingBevels = (data.ceilingBevels || []).map(b => CeilingBevel.fromJSON(b));
     return f;
   }
 }

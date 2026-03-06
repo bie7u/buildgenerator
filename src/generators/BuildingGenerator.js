@@ -22,6 +22,9 @@ export class BuildingGenerator {
     this.windowMat = new THREE.MeshLambertMaterial({ color: 0x88bbff, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
     this.doorFrameMat = new THREE.MeshLambertMaterial({ color: 0x996633 });
     this.railingMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+    // Sloped ceiling panels — same tone as slab but double-sided so they are
+    // visible from inside the room (looking upward at the sloped surface)
+    this.ceilingBevelMat = new THREE.MeshLambertMaterial({ color: 0xd0d0d0, side: THREE.DoubleSide });
   }
 
   /**
@@ -74,7 +77,11 @@ export class BuildingGenerator {
       // Ceiling slab — cut floor holes AND bevel regions so the sloped wall
       // top-face (already part of the wall extrusion cap) acts as the ceiling
       const bevelCuts = this._computeBevelCuts(floorContour, floor, building.wallThickness);
-      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, bevelCuts);
+      const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor);
+      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, [...bevelCuts, ...ceilingBevelCuts]);
+
+      // Sloped ceiling panels for every ceiling bevel on this floor
+      this._generateCeilingBevelMeshes(floorContour, floor, floorBaseY, building.wallThickness, group);
     }
   }
 
@@ -331,6 +338,120 @@ export class BuildingGenerator {
     }
 
     return cuts;
+  }
+
+  /**
+   * For each CeilingBevel on this floor, compute a rectangular hole in the slab
+   * shape-space so the sloped ceiling panel mesh replaces the flat slab there.
+   *
+   * The hole spans from the outer wall face to `depth` metres inward.
+   * Uses the same slab shape-space conventions as _computeBevelCuts.
+   */
+  _computeCeilingBevelCuts(contour, floor) {
+    const cuts = [];
+    const n = contour.length;
+
+    for (const cb of (floor.ceilingBevels || [])) {
+      const i = cb.wallIndex;
+      if (i >= n) continue;
+
+      const p1 = contour[i];
+      const p2 = contour[(i + 1) % n];
+      const dx = p2.x - p1.x, dz = p2.y - p1.y;
+      const wallLen = Math.sqrt(dx * dx + dz * dz);
+      if (wallLen < 0.01) continue;
+
+      const ndx = dx / wallLen, ndz = dz / wallLen;
+
+      const oStart = Math.max(0, Math.min(wallLen, cb.offsetStart));
+      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, cb.offsetEnd !== null ? cb.offsetEnd : wallLen));
+      const depth  = Math.max(0.1, cb.depth);
+
+      // Corners in slab shape-space — same formula as _computeBevelCuts but
+      // using depth instead of wallThick.
+      // A = outer at oStart, B = outer at oEnd, C = inner at oEnd, D = inner at oStart
+      const ax  = p1.x + oStart * ndx,   ay  = -(p1.y + oStart * ndz);
+      const bx  = p1.x + oEnd   * ndx,   by  = -(p1.y + oEnd   * ndz);
+      const cx  = bx + ndz * depth,      cy  = by + ndx * depth;
+      const ddx = ax + ndz * depth,      ddy = ay + ndx * depth;
+
+      const path = new THREE.Path();
+      path.moveTo(ax,  ay);
+      path.lineTo(ddx, ddy);  // inward at start
+      path.lineTo(cx,  cy);   // inward at end
+      path.lineTo(bx,  by);   // outer at end
+      path.closePath();
+      cuts.push(path);
+    }
+
+    return cuts;
+  }
+
+  /**
+   * For each CeilingBevel on this floor, create a sloped quad mesh that fills
+   * the hole cut by _computeCeilingBevelCuts.
+   *
+   * The quad spans from the outer wall face (at heights heightStart/heightEnd)
+   * to `depth` metres into the room (at full floor height), creating a sloped
+   * ceiling that is visible from inside the room when looking upward.
+   *
+   * Vertex winding: CCW when viewed from below (inside room looking up) so that
+   * the face normal points downward and is lit correctly.
+   *
+   * World-space inward normal from wall direction (ndx, ndz):
+   *   Δworld_x = +ndz * depth
+   *   Δworld_z = -ndx * depth
+   */
+  _generateCeilingBevelMeshes(contour, floor, baseY, wallThick, group) {
+    const n = contour.length;
+    const floorH = floor.height;
+
+    for (const cb of (floor.ceilingBevels || [])) {
+      const i = cb.wallIndex;
+      if (i >= n) continue;
+
+      const p1 = contour[i];
+      const p2 = contour[(i + 1) % n];
+      const dx = p2.x - p1.x, dz = p2.y - p1.y;
+      const wallLen = Math.sqrt(dx * dx + dz * dz);
+      if (wallLen < 0.01) continue;
+
+      const ndx = dx / wallLen, ndz = dz / wallLen;
+
+      const oStart = Math.max(0, Math.min(wallLen, cb.offsetStart));
+      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, cb.offsetEnd !== null ? cb.offsetEnd : wallLen));
+      const hS     = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, cb.heightStart));
+      const hE     = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, cb.heightEnd));
+      const depth  = Math.max(0.1, cb.depth);
+
+      // 4 world-space corners of the sloped ceiling panel:
+      //   A = outer-start  (at wall face, bevel ceiling height)
+      //   B = outer-end
+      //   C = inner-end    (depth into room, at full floor height)
+      //   D = inner-start
+      const Ax = p1.x + oStart * ndx,           Ay = baseY + hS,     Az = p1.y + oStart * ndz;
+      const Bx = p1.x + oEnd   * ndx,           By = baseY + hE,     Bz = p1.y + oEnd   * ndz;
+      const Cx = Bx + ndz * depth,              Cy = baseY + floorH, Cz = Bz - ndx * depth;
+      const Dx = Ax + ndz * depth,              Dy = baseY + floorH, Dz = Az - ndx * depth;
+
+      // Two triangles, wound CCW when viewed from below (face normal points down,
+      // toward the viewer standing inside the room looking up).
+      // Triangle 1: A-C-B  (cross-product gives downward normal for a flat panel)
+      // Triangle 2: A-D-C
+      const positions = new Float32Array([
+        Ax, Ay, Az,   Cx, Cy, Cz,   Bx, By, Bz,
+        Ax, Ay, Az,   Dx, Dy, Dz,   Cx, Cy, Cz,
+      ]);
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.computeVertexNormals();
+
+      const mesh = new THREE.Mesh(geo, this.ceilingBevelMat);
+      mesh.castShadow  = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
   }
 
   // ── Internal walls ────────────────────────────────────────────────────────
