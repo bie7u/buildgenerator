@@ -14,8 +14,9 @@ const MIN_BEVEL_WIDTH = 0.1;
 /** Distance in metres within which an offset handle snaps to the wall end */
 const SNAP_TO_END_THRESHOLD = 0.05;
 
-/**
- * Side Elevation Editor
+/** Arrow buttons */
+const ARROW_LEFT  = '\u25c4';
+const ARROW_RIGHT = '\u25ba';
  *
  * 2D canvas view for one external wall segment, showing ALL wall bevels.
  * Supports multiple independent bevels per wall (e.g., one from each side).
@@ -106,11 +107,11 @@ export class SideElevationEditor {
 
     // Wall nav
     const wallLbl  = this._makeLabel('Wall:');
-    const wallPrev = this._makeBtn('\u25c4', () => this._stepWall(-1));
+    const wallPrev = this._makeBtn(ARROW_LEFT,  () => this._stepWall(-1));
     const wallCnt  = document.createElement('span');
     wallCnt.style.cssText = 'color:#ccc;font-size:11px;font-weight:600;min-width:44px;text-align:center';
     this._wallLabel = wallCnt;
-    const wallNext = this._makeBtn('\u25ba', () => this._stepWall(1));
+    const wallNext = this._makeBtn(ARROW_RIGHT, () => this._stepWall(1));
 
     // Separator
     const sep = document.createElement('span');
@@ -119,11 +120,11 @@ export class SideElevationEditor {
 
     // Bevel nav
     const bevelLbl  = this._makeLabel('Bevel:');
-    const bevelPrev = this._makeBtn('\u25c4', () => this._stepBevel(-1));
+    const bevelPrev = this._makeBtn(ARROW_LEFT,  () => this._stepBevel(-1));
     const bevelCnt  = document.createElement('span');
     bevelCnt.style.cssText = 'color:#ccc;font-size:11px;font-weight:600;min-width:44px;text-align:center';
     this._bevelLabel = bevelCnt;
-    const bevelNext = this._makeBtn('\u25ba', () => this._stepBevel(1));
+    const bevelNext = this._makeBtn(ARROW_RIGHT, () => this._stepBevel(1));
 
     // Add / Delete bevel buttons
     const btnAdd = this._makeBtn('+\u00a0Add', () => this._addNewBevel());

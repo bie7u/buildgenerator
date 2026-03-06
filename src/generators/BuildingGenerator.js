@@ -319,11 +319,11 @@ export class BuildingGenerator {
       const ax = p1.x + oStart * ndx,        ay = -(p1.y + oStart * ndz);
       const bx = p1.x + oEnd   * ndx,        by = -(p1.y + oEnd   * ndz);
       const cx = bx + ndz * wallThick,        cy = by + ndx * wallThick;
-      const dxx = ax + ndz * wallThick,       dy = ay + ndx * wallThick;
+      const ddx = ax + ndz * wallThick,       ddy = ay + ndx * wallThick;
 
       const path = new THREE.Path();
-      path.moveTo(ax, ay);
-      path.lineTo(dxx, dy);   // inward at start
+      path.moveTo(ax,  ay);
+      path.lineTo(ddx, ddy);  // inward at start
       path.lineTo(cx,  cy);   // inward at end
       path.lineTo(bx,  by);   // outer at end
       path.closePath();
