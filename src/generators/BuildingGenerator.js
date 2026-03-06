@@ -370,16 +370,17 @@ export class BuildingGenerator {
       // Corners in slab shape-space — same formula as _computeBevelCuts but
       // using depth instead of wallThick.
       // A = outer at oStart, B = outer at oEnd, C = inner at oEnd, D = inner at oStart
-      const ax  = p1.x + oStart * ndx,   ay  = -(p1.y + oStart * ndz);
-      const bx  = p1.x + oEnd   * ndx,   by  = -(p1.y + oEnd   * ndz);
-      const cx  = bx + ndz * depth,      cy  = by + ndx * depth;
-      const ddx = ax + ndz * depth,      ddy = ay + ndx * depth;
+      // (Using uppercase D to avoid clash with the wall-direction variable dx above.)
+      const ax = p1.x + oStart * ndx,   ay = -(p1.y + oStart * ndz);
+      const bx = p1.x + oEnd   * ndx,   by = -(p1.y + oEnd   * ndz);
+      const cx = bx + ndz * depth,      cy = by + ndx * depth;
+      const Dx = ax + ndz * depth,      Dy = ay + ndx * depth;
 
       const path = new THREE.Path();
-      path.moveTo(ax,  ay);
-      path.lineTo(ddx, ddy);  // inward at start
-      path.lineTo(cx,  cy);   // inward at end
-      path.lineTo(bx,  by);   // outer at end
+      path.moveTo(ax, ay);
+      path.lineTo(Dx, Dy);  // inward at start
+      path.lineTo(cx, cy);  // inward at end
+      path.lineTo(bx, by);  // outer at end
       path.closePath();
       cuts.push(path);
     }

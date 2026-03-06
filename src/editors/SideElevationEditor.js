@@ -145,7 +145,7 @@ export class SideElevationEditor {
     this._modeCeilingBtn = modeCeiling;
 
     // Depth input — visible only in ceiling mode
-    const depthLbl = this._makeLabel('Depth(m):');
+    const depthLbl = this._makeLabel('Depth (m):');
     depthLbl.style.display = 'none';
     this._depthLbl = depthLbl;
 
