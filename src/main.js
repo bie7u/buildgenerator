@@ -186,5 +186,5 @@ function init() {
 
 init();
 
-// Expose for browser console debugging
-window.app = app;
+// Expose for browser console debugging (use a unique name to avoid clash with <div id="app">)
+window.__buildingApp = app;
