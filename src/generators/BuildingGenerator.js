@@ -74,11 +74,15 @@ export class BuildingGenerator {
       this._generateElevator(floor, floorBaseY, group);
       this._generateStairs(floor, floorBaseY, group);
 
-      // Ceiling slab — cut floor holes AND bevel regions so the sloped wall
-      // top-face (already part of the wall extrusion cap) acts as the ceiling
-      const bevelCuts = this._computeBevelCuts(floorContour, floor, building.wallThickness);
+      // Ceiling slab — cut floor holes AND ceiling-bevel regions so the sloped
+      // ceiling panel mesh replaces the flat slab in those areas.
+      // Note: _computeBevelCuts (for WallBevels) is intentionally NOT called here
+      // because WallBevel slab holes are degenerate (outer edge on contour boundary)
+      // and would be silently ignored by Earcut, which can confuse diagnostics.
+      // WallBevel wall trimming still works via _computeTopProfile; their inner-face
+      // fill panels are generated in _generateExternalWalls.
       const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor, building.wallThickness);
-      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, [...bevelCuts, ...ceilingBevelCuts]);
+      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, ceilingBevelCuts);
 
       // Sloped ceiling panels for every ceiling bevel on this floor
       this._generateCeilingBevelMeshes(floorContour, floor, floorBaseY, building.wallThickness, group);
@@ -190,6 +194,67 @@ export class BuildingGenerator {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       group.add(mesh);
+
+      // ── Fill panels for legacy WallBevel regions ─────────────────────────────
+      // When a WallBevel shortens the wall below floorH, the inner wall face
+      // has a visible gap from hS to floorH.  Add a vertical quad panel at the
+      // inner face to close the room so it is not see-through from inside.
+      if (bevels.length > 0) {
+        this._generateWallBevelFillPanels(bevels, wallLen, floorH, wallThick, p1, ndx, ndz, floorBaseY, group);
+      }
+    }
+  }
+
+  /**
+   * For each WallBevel, create a vertical "fill" panel at the inner wall face
+   * (wallThick inward from the outer face) covering the gap from the bevel
+   * height up to floorH.  This prevents the room from being see-through above
+   * the bevel region when the shortened wall no longer reaches the ceiling.
+   */
+  _generateWallBevelFillPanels(bevels, wallLen, floorH, wallThick, p1, ndx, ndz, floorBaseY, group) {
+    for (const bv of bevels) {
+      const oStart = Math.max(0, Math.min(wallLen, bv.offsetStart));
+      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, bv.offsetEnd !== null ? bv.offsetEnd : wallLen));
+      const hS     = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, bv.heightStart));
+      const hE     = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, bv.heightEnd));
+
+      // Skip if the bevel is already at full height (no gap to fill)
+      if (hS >= floorH - 0.001 && hE >= floorH - 0.001) continue;
+
+      // Panel in world space, at the inner wall face (z = wallThick in local space).
+      // Local (x, y, z) → world via matrix: wx = ndx*x + ndz*z + p1.x,
+      //                                      wy = y + floorBaseY,
+      //                                      wz = ndz*x - ndx*z + p1.y
+      const wpos = (lx, ly, lz) => [
+        ndx * lx + ndz * lz + p1.x,
+        ly + floorBaseY,
+        ndz * lx - ndx * lz + p1.y,
+      ];
+
+      // Four corners of the fill panel at z=wallThick:
+      //   BL = (oStart, hS, wallThick)  — bottom-left (start, bevel height)
+      //   BR = (oEnd,   hE, wallThick)  — bottom-right (end, bevel height)
+      //   TR = (oEnd,   floorH, wallThick) — top-right (full height)
+      //   TL = (oStart, floorH, wallThick) — top-left
+      const [BLx, BLy, BLz] = wpos(oStart, hS,     wallThick);
+      const [BRx, BRy, BRz] = wpos(oEnd,   hE,     wallThick);
+      const [TRx, TRy, TRz] = wpos(oEnd,   floorH, wallThick);
+      const [TLx, TLy, TLz] = wpos(oStart, floorH, wallThick);
+
+      // Two triangles wound CCW when viewed from the room interior (inward-facing)
+      const positions = new Float32Array([
+        BLx, BLy, BLz,   BRx, BRy, BRz,   TRx, TRy, TRz,
+        BLx, BLy, BLz,   TRx, TRy, TRz,   TLx, TLy, TLz,
+      ]);
+
+      const fillGeo = new THREE.BufferGeometry();
+      fillGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      fillGeo.computeVertexNormals();
+
+      const fillMesh = new THREE.Mesh(fillGeo, this.wallMat);
+      fillMesh.castShadow    = true;
+      fillMesh.receiveShadow = true;
+      group.add(fillMesh);
     }
   }
 

@@ -1,5 +1,3 @@
-import * as THREE from 'three';
-import { WallBevel } from '../models/WallBevel.js';
 import { CeilingBevel } from '../models/CeilingBevel.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -45,12 +43,12 @@ export class SideElevationEditor {
     this.floorIndex  = 0;
     this.wallIndex   = 0;
 
-    // Active editing mode: 'wall' = wall bevels, 'ceiling' = ceiling bevels
-    this._mode = 'wall';
+    // Editing mode is always 'ceiling' — WallBevels are shown as read-only
+    // background but cannot be created or edited through this UI.
+    this._mode = 'ceiling';
 
-    // Independent active-bevel indices for each mode
-    this._activeBevelIdx        = 0;   // wall mode
-    this._activeCeilingBevelIdx = 0;   // ceiling mode
+    // Active ceiling-bevel index for the current wall
+    this._activeCeilingBevelIdx = 0;
 
     // Canvas / DOM refs
     this._canvas         = null;
@@ -60,7 +58,6 @@ export class SideElevationEditor {
     this._floorSelect    = null;
     this._wallLabel      = null;
     this._bevelLabel     = null;
-    this._modeWallBtn    = null;
     this._modeCeilingBtn = null;
     this._depthLbl       = null;
     this._depthInput     = null;
@@ -101,7 +98,7 @@ export class SideElevationEditor {
     const title = document.createElement('span');
     title.id = 'elevation-title';
     title.style.cssText = 'color:#ccc;font-size:12px;font-weight:600;min-width:100px';
-    title.textContent = 'Side Elevation';
+    title.textContent = 'Roof Slope Editor';
 
     // Floor select
     const floorLbl = this._makeLabel('Floor:');
@@ -114,7 +111,6 @@ export class SideElevationEditor {
       this.floorIndex = parseInt(floorSel.value, 10);
       const maxWall = this._getWallCount() - 1;
       if (this.wallIndex > maxWall) this.wallIndex = Math.max(0, maxWall);
-      this._activeBevelIdx        = 0;
       this._activeCeilingBevelIdx = 0;
       this._updateWallLabel();
       this._updateBevelLabel();
@@ -137,18 +133,15 @@ export class SideElevationEditor {
     sep.style.cssText = 'color:#444;font-size:11px';
     sep.textContent = '|';
 
-    // ── Mode toggle buttons ──────────────────────────────────────────────────
-    const modeWall = this._makeBtn('\u2195\u00a0Wall', () => this._setMode('wall'));
-    modeWall.title = 'Edit wall bevels (sloped wall tops)';
-    this._modeWallBtn = modeWall;
-
-    const modeCeiling = this._makeBtn('\u2302\u00a0Roof Slope', () => this._setMode('ceiling'));
-    modeCeiling.title = 'Roof Slope / Ceiling Bevel — lower the wall top near this edge to create a sloped roof. Click +\u00a0Add, then drag the cyan handles down.';
+    // ── Roof Slope label (ceiling mode is now the only mode) ─────────────────
+    const modeCeiling = this._makeBtn('\u2302\u00a0Roof Slope', null);
+    modeCeiling.title = 'Roof Slope — lower the wall top near this edge to create a sloped roof. Click + Add, then drag the cyan handles down.';
+    modeCeiling.style.outline = '2px solid #22bbaa';
+    modeCeiling.style.cursor = 'default';
     this._modeCeilingBtn = modeCeiling;
 
-    // Depth input — visible only in ceiling mode
+    // Depth input
     const depthLbl = this._makeLabel('Depth (m):');
-    depthLbl.style.display = 'none';
     this._depthLbl = depthLbl;
 
     const depthInput = document.createElement('input');
@@ -161,28 +154,27 @@ export class SideElevationEditor {
     depthInput.style.cssText = [
       'width:52px', 'background:#2a2a2a', 'color:#ccc',
       'border:1px solid #444', 'border-radius:4px',
-      'padding:2px 4px', 'font-size:11px', 'display:none',
+      'padding:2px 4px', 'font-size:11px',
     ].join(';');
     depthInput.addEventListener('change', () => {
       const val = parseFloat(depthInput.value);
       if (!isNaN(val) && val > 0) {
         const bevel = this._getActiveBevel();
-        if (bevel && this._mode === 'ceiling') { bevel.depth = val; this.redraw(); }
+        if (bevel) { bevel.depth = val; this.redraw(); }
       }
     });
     depthInput.addEventListener('input', () => {
       const val = parseFloat(depthInput.value);
       if (!isNaN(val) && val > 0) {
         const bevel = this._getActiveBevel();
-        if (bevel && this._mode === 'ceiling') { bevel.depth = val; this.redraw(); }
+        if (bevel) { bevel.depth = val; this.redraw(); }
       }
     });
     this._depthInput = depthInput;
 
-    // "Apply to all walls" button — visible only in ceiling mode
+    // "Apply to all walls" button
     const btnAllWalls = this._makeBtn('\u27f3\u00a0All Walls', () => this._applyToAllWalls());
     btnAllWalls.title = 'Copy this roof slope to every wall on this floor (quick hip-roof)';
-    btnAllWalls.style.display = 'none';
     btnAllWalls.style.background = '#1a2a3a';
     btnAllWalls.style.borderColor = '#3a6a9a';
     btnAllWalls.style.color = '#88bbee';
@@ -194,7 +186,7 @@ export class SideElevationEditor {
     sep2.textContent = '|';
 
     // Bevel nav
-    const bevelLbl  = this._makeLabel('Bevel:');
+    const bevelLbl  = this._makeLabel('Slope:');
     const bevelPrev = this._makeBtn(ARROW_LEFT,  () => this._stepBevel(-1));
     const bevelCnt  = document.createElement('span');
     bevelCnt.style.cssText = 'color:#ccc;font-size:11px;font-weight:600;min-width:44px;text-align:center';
@@ -212,7 +204,7 @@ export class SideElevationEditor {
     btnDel.style.borderColor = '#7a3a3a';
     btnDel.style.color = '#ee8888';
 
-    // Hint (mode-dependent — updated by _updateHint)
+    // Hint
     const hint = document.createElement('span');
     hint.id = 'elevation-hint';
     hint.style.cssText = 'color:#555;font-size:10px;flex:1';
@@ -227,7 +219,7 @@ export class SideElevationEditor {
       floorLbl, floorSel,
       wallLbl, wallPrev, wallCnt, wallNext,
       sep,
-      modeWall, modeCeiling,
+      modeCeiling,
       depthLbl, depthInput,
       btnAllWalls,
       sep2,
@@ -293,13 +285,11 @@ export class SideElevationEditor {
   show(floorIndex, wallIndex) {
     this.floorIndex             = floorIndex;
     this.wallIndex              = wallIndex;
-    this._activeBevelIdx        = 0;
     this._activeCeilingBevelIdx = 0;
 
     this._populateFloorSelect();
     this._updateWallLabel();
     this._updateBevelLabel();
-    this._updateModeButtons();
     this._syncDepthInput();
 
     this._container.style.display = 'flex';
@@ -375,7 +365,6 @@ export class SideElevationEditor {
     const count = this._getWallCount();
     if (count === 0) return;
     this.wallIndex              = (this.wallIndex + delta + count) % count;
-    this._activeBevelIdx        = 0;
     this._activeCeilingBevelIdx = 0;
     this._updateWallLabel();
     this._updateBevelLabel();
@@ -390,93 +379,54 @@ export class SideElevationEditor {
     this._wallLabel.textContent = count ? (this.wallIndex + 1) + ' / ' + count : '\u2014';
   }
 
-  // ── Mode switching ──────────────────────────────────────────────────────────
+  // ── Hint and depth sync ────────────────────────────────────────────────────
 
-  /** Switch between 'wall' and 'ceiling' bevel editing modes. */
-  _setMode(mode) {
-    if (this._mode === mode) return;
-    this._mode = mode;
-    this._updateModeButtons();
-    this._updateBevelLabel();
-    this._syncDepthInput();
-    this._updateTitle();
-    this.redraw();
-  }
-
-  _updateModeButtons() {
-    if (!this._modeWallBtn || !this._modeCeilingBtn) return;
-    const isCeiling = this._mode === 'ceiling';
-    if (!isCeiling) {
-      this._modeWallBtn.style.outline    = '2px solid #5588cc';
-      this._modeCeilingBtn.style.outline = '';
-    } else {
-      this._modeWallBtn.style.outline    = '';
-      this._modeCeilingBtn.style.outline = '2px solid #22bbaa';
-    }
-    if (this._btnAllWalls) this._btnAllWalls.style.display = isCeiling ? '' : 'none';
-    this._updateHint();
-  }
-
-  /** Update the hint text based on current mode and bevel count. */
+  /** Update the hint text based on bevel count. */
   _updateHint() {
     if (!this._hintEl) return;
-    if (this._mode === 'ceiling') {
-      const n = this._getBevels('ceiling').length;
-      if (n === 0) {
-        this._hintEl.style.color = '#998844';
-        this._hintEl.textContent =
-          '\u2302 Click +\u00a0Add to create a roof slope on this wall. ' +
-          'Drag cyan \u2195 handles down to lower the wall edge. ' +
-          'Depth = how far the slope extends into the room.';
-      } else {
-        this._hintEl.style.color = '#555';
-        this._hintEl.textContent =
-          'Cyan \u2195 = wall height at outer edge  |  Orange \u2194 = region boundary  |  ' +
-          'Depth input = how far slope extends inward  |  Right-click \u2192 delete.';
-      }
+    const n = this._getBevels('ceiling').length;
+    if (n === 0) {
+      this._hintEl.style.color = '#998844';
+      this._hintEl.textContent =
+        '\u2302 Click +\u00a0Add to create a roof slope on this wall. ' +
+        'Drag cyan \u2195 handles down to lower the wall edge. ' +
+        'Depth = how far the slope extends into the room.';
     } else {
       this._hintEl.style.color = '#555';
-      this._hintEl.textContent = 'Drag cyan \u2195 (height) or orange \u2194 (region). Right-click \u2192 delete.';
+      this._hintEl.textContent =
+        'Cyan \u2195 = wall height at outer edge  |  Orange \u2194 = region boundary  |  ' +
+        'Depth input = how far slope extends inward  |  Right-click \u2192 delete.';
     }
   }
 
-  /** Show/hide depth input and sync its value to the active ceiling bevel. */
+  /** Sync depth input value to the active ceiling bevel. */
   _syncDepthInput() {
-    if (!this._depthInput || !this._depthLbl) return;
-    const visible = this._mode === 'ceiling';
-    this._depthInput.style.display = visible ? '' : 'none';
-    this._depthLbl.style.display   = visible ? '' : 'none';
-    if (visible) {
-      const bevel = this._getActiveBevel();
-      this._depthInput.value = bevel ? bevel.depth : 2.0;
-    }
+    if (!this._depthInput) return;
+    const bevel = this._getActiveBevel();
+    this._depthInput.value = bevel ? bevel.depth : 2.0;
   }
 
-  // ── Bevel array helpers (mode-aware) ───────────────────────────────────────
+  // ── Bevel array helpers ────────────────────────────────────────────────────
 
   /**
-   * Returns sorted bevels for the current wall in the given mode.
-   * Defaults to the current mode.
+   * Returns sorted ceiling bevels for the current wall.
+   * Pass mode='wall' only for read-only canvas drawing of legacy WallBevels.
    */
-  _getBevels(mode = this._mode) {
+  _getBevels(mode = 'ceiling') {
     const floor = this._getFloor();
     if (!floor) return [];
-    const arr = mode === 'ceiling' ? (floor.ceilingBevels || []) : floor.wallBevels;
+    const arr = mode === 'ceiling' ? (floor.ceilingBevels || []) : (floor.wallBevels || []);
     return arr
       .filter(bv => bv.wallIndex === this.wallIndex)
       .sort((a, b) => a.offsetStart - b.offsetStart);
   }
 
-  /** Sorted wall bevels for the current wall (kept for backward compat). */
-  _getBevelsForWall() { return this._getBevels('wall'); }
-
-  _getActiveIdx(mode = this._mode) {
-    return mode === 'ceiling' ? this._activeCeilingBevelIdx : this._activeBevelIdx;
+  _getActiveIdx() {
+    return this._activeCeilingBevelIdx;
   }
 
-  _setActiveIdx(idx, mode = this._mode) {
-    if (mode === 'ceiling') this._activeCeilingBevelIdx = idx;
-    else this._activeBevelIdx = idx;
+  _setActiveIdx(idx) {
+    this._activeCeilingBevelIdx = idx;
   }
 
   _getActiveBevel() {
@@ -508,14 +458,13 @@ export class SideElevationEditor {
   _updateTitle() {
     const el = document.getElementById('elevation-title');
     if (!el) return;
-    const nW = this._getBevels('wall').length;
     const nC = this._getBevels('ceiling').length;
-    const parts = [];
-    if (nW) parts.push(nW + ' wall bevel' + (nW > 1 ? 's' : ''));
-    if (nC) parts.push(nC + ' ceiling bevel' + (nC > 1 ? 's' : ''));
-    el.textContent = 'Side Elevation \u2014 Floor ' + (this.floorIndex + 1) +
-      ', Wall ' + (this.wallIndex + 1) +
-      (parts.length ? ' [' + parts.join(', ') + ']' : '');
+    const nW = this._getBevels('wall').length;
+    let suffix = '';
+    if (nC) suffix += ' [' + nC + ' slope' + (nC > 1 ? 's' : '') + ']';
+    if (nW) suffix += ' (' + nW + ' legacy wall bevel' + (nW > 1 ? 's' : '') + ')';
+    el.textContent = 'Roof Slope Editor \u2014 Floor ' + (this.floorIndex + 1) +
+      ', Wall ' + (this.wallIndex + 1) + suffix;
   }
 
   // ── Data access ────────────────────────────────────────────────────────────
@@ -561,22 +510,14 @@ export class SideElevationEditor {
     let bevel = this._getActiveBevel();
     if (!bevel) {
       const { wallLen, floorH } = this._getWallBase();
-      if (this._mode === 'ceiling') {
-        // Start at 50% of floor height so the slope is immediately visible
-        const initH = Math.max(MIN_BEVEL_HEIGHT, floorH * 0.5);
-        const initDepth = Math.min(Math.max(1.0, Math.round(wallLen * 0.4 * 10) / 10), 10.0);
-        bevel = new CeilingBevel(this.wallIndex, initH, initH, 0, null, initDepth);
-        floor.ceilingBevels.push(bevel);
-        const sorted = this._getBevels('ceiling');
-        this._activeCeilingBevelIdx = sorted.findIndex(bv => bv === bevel);
-        if (this._activeCeilingBevelIdx < 0) this._activeCeilingBevelIdx = 0;
-      } else {
-        bevel = new WallBevel(this.wallIndex, floorH, floorH, 0, null);
-        floor.wallBevels.push(bevel);
-        const sorted = this._getBevels('wall');
-        this._activeBevelIdx = sorted.findIndex(bv => bv === bevel);
-        if (this._activeBevelIdx < 0) this._activeBevelIdx = 0;
-      }
+      // Start at 50% of floor height so the slope is immediately visible
+      const initH     = Math.max(MIN_BEVEL_HEIGHT, floorH * 0.5);
+      const initDepth = Math.min(Math.max(1.0, Math.round(wallLen * 0.4 * 10) / 10), 10.0);
+      bevel = new CeilingBevel(this.wallIndex, initH, initH, 0, null, initDepth);
+      floor.ceilingBevels.push(bevel);
+      const sorted = this._getBevels('ceiling');
+      this._activeCeilingBevelIdx = sorted.findIndex(bv => bv === bevel);
+      if (this._activeCeilingBevelIdx < 0) this._activeCeilingBevelIdx = 0;
       this._updateBevelLabel();
       this._updateTitle();
     }
@@ -591,7 +532,7 @@ export class SideElevationEditor {
     const { wallLen, floorH } = this._getWallBase();
     if (wallLen < MIN_BEVEL_WIDTH * 2) return;
 
-    const bevels = this._getBevels();  // mode-aware
+    const bevels = this._getBevels();
 
     // Find the largest free gap on this wall
     const taken = bevels.map(bv => ({
@@ -610,50 +551,26 @@ export class SideElevationEditor {
 
     gaps.sort((a, b) => (b.e - b.s) - (a.e - a.s));
     const { s, e } = gaps[0];
-    const gapSize = e - s;
 
-    // For ceiling mode: first bevel always covers the full gap (full wall effect).
-    // For wall mode (or subsequent ceiling bevels): split the gap.
-    let bevelStart = s;
-    const bevelEnd   = e;
-    if (this._mode !== 'ceiling' && gapSize > MIN_BEVEL_WIDTH * 3) {
-      bevelStart = s + Math.round(gapSize / 2 * 10) / 10; // round to 0.1 m
-    }
+    const snapEnd   = Math.abs(e - wallLen) < SNAP_TO_END_THRESHOLD ? null : e;
+    const snapStart = Math.abs(s) < SNAP_TO_END_THRESHOLD ? 0 : s;
 
-    const snapEnd = Math.abs(bevelEnd - wallLen) < SNAP_TO_END_THRESHOLD ? null : bevelEnd;
-    const snapStart = Math.abs(bevelStart) < SNAP_TO_END_THRESHOLD ? 0 : bevelStart;
-
-    let newBevel;
-    if (this._mode === 'ceiling') {
-      // Default height: 50% of floor height — immediately creates a dramatic, visible slope.
-      // Default depth: cover ~40% of wall length, capped at 10 m — enough for a real roof slope.
-      const initH     = Math.max(MIN_BEVEL_HEIGHT, Math.round(floorH * 0.5 * 10) / 10);
-      const initDepth = Math.min(Math.max(1.0, Math.round(wallLen * 0.4 * 10) / 10), 10.0);
-      newBevel = new CeilingBevel(
-        this.wallIndex,
-        initH,
-        initH,
-        snapStart,
-        snapEnd,
-        initDepth,
-      );
-      floor.ceilingBevels.push(newBevel);
-      const sorted = this._getBevels('ceiling');
-      this._activeCeilingBevelIdx = sorted.findIndex(bv => bv === newBevel);
-      if (this._activeCeilingBevelIdx < 0) this._activeCeilingBevelIdx = sorted.length - 1;
-    } else {
-      newBevel = new WallBevel(
-        this.wallIndex,
-        Math.max(MIN_BEVEL_HEIGHT, floorH * 0.7),
-        Math.max(MIN_BEVEL_HEIGHT, floorH * 0.7),
-        bevelStart,
-        snapEnd,
-      );
-      floor.wallBevels.push(newBevel);
-      const sorted = this._getBevels('wall');
-      this._activeBevelIdx = sorted.findIndex(bv => bv === newBevel);
-      if (this._activeBevelIdx < 0) this._activeBevelIdx = sorted.length - 1;
-    }
+    // Default height: 50% of floor height — immediately creates a dramatic, visible slope.
+    // Default depth: cover ~40% of wall length, capped at 10 m — enough for a real roof slope.
+    const initH     = Math.max(MIN_BEVEL_HEIGHT, Math.round(floorH * 0.5 * 10) / 10);
+    const initDepth = Math.min(Math.max(1.0, Math.round(wallLen * 0.4 * 10) / 10), 10.0);
+    const newBevel  = new CeilingBevel(
+      this.wallIndex,
+      initH,
+      initH,
+      snapStart,
+      snapEnd,
+      initDepth,
+    );
+    floor.ceilingBevels.push(newBevel);
+    const sorted = this._getBevels('ceiling');
+    this._activeCeilingBevelIdx = sorted.findIndex(bv => bv === newBevel);
+    if (this._activeCeilingBevelIdx < 0) this._activeCeilingBevelIdx = sorted.length - 1;
 
     this._updateBevelLabel();
     this._updateTitle();
@@ -667,17 +584,10 @@ export class SideElevationEditor {
     const bevel = this._getActiveBevel();
     if (!bevel) return;
 
-    if (this._mode === 'ceiling') {
-      floor.ceilingBevels = floor.ceilingBevels.filter(bv => bv !== bevel);
-      const count = this._getBevels('ceiling').length;
-      if (this._activeCeilingBevelIdx >= count)
-        this._activeCeilingBevelIdx = Math.max(0, count - 1);
-    } else {
-      floor.wallBevels = floor.wallBevels.filter(bv => bv !== bevel);
-      const count = this._getBevels('wall').length;
-      if (this._activeBevelIdx >= count)
-        this._activeBevelIdx = Math.max(0, count - 1);
-    }
+    floor.ceilingBevels = floor.ceilingBevels.filter(bv => bv !== bevel);
+    const count = this._getBevels('ceiling').length;
+    if (this._activeCeilingBevelIdx >= count)
+      this._activeCeilingBevelIdx = Math.max(0, count - 1);
 
     this._updateBevelLabel();
     this._updateTitle();
@@ -695,7 +605,7 @@ export class SideElevationEditor {
     if (!floor || !b) return;
 
     const src = this._getActiveBevel();
-    if (!src || this._mode !== 'ceiling') return;
+    if (!src) return;
 
     const contour   = b.getFloorContour(this.floorIndex);
     const wallCount = contour.length;
@@ -821,10 +731,10 @@ export class SideElevationEditor {
     ctx.fillStyle = '#445566'; ctx.font = '10px sans-serif';
     ctx.fillText('floor height: ' + floorH.toFixed(1) + 'm', 4, refY - 3);
 
-    // ── Draw all WALL bevels (always visible, regardless of mode) ─────────────
+    // ── Draw all WALL bevels (read-only reference, dimmed) ─────────────────────
     const allBevels = this._getBevels('wall');
-    allBevels.forEach((bv, idx) => {
-      const isActive = this._mode === 'wall' && idx === this._getActiveIdx('wall');
+    allBevels.forEach((bv) => {
+      // Wall bevels are always shown dimmed (read-only — no longer editable via UI)
       const offStart = bv.offsetStart;
       const offEnd   = bv.offsetEnd !== null ? bv.offsetEnd : wallLen;
       const hS = bv.heightStart;
@@ -835,20 +745,20 @@ export class SideElevationEditor {
       const bHs = this._elev2px(offStart, hS);
       const bHe = this._elev2px(offEnd,   hE);
 
-      // Bevel fill (trapezoid: floor line → sloped top)
+      // Bevel fill (trapezoid: floor line → sloped top) — always dimmed
       ctx.beginPath();
       ctx.moveTo(bOs.x, bOs.y); ctx.lineTo(bOe.x, bOe.y);
       ctx.lineTo(bHe.x, bHe.y); ctx.lineTo(bHs.x, bHs.y);
       ctx.closePath();
-      ctx.fillStyle = isActive ? 'rgba(80,140,200,0.35)' : 'rgba(80,140,200,0.12)';
+      ctx.fillStyle = 'rgba(80,140,200,0.12)';
       ctx.fill();
-      ctx.strokeStyle = isActive ? '#5599cc' : '#3366aa';
-      ctx.lineWidth = isActive ? 2 : 1;
+      ctx.strokeStyle = '#3366aa';
+      ctx.lineWidth = 1;
       ctx.stroke();
 
       // Boundary dashed lines
       ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = isActive ? '#88bbdd' : '#446688';
+      ctx.strokeStyle = '#446688';
       ctx.lineWidth = 1;
       if (offStart > 0.001) {
         const topS = this._elev2px(offStart, floorH);
@@ -862,26 +772,18 @@ export class SideElevationEditor {
       }
       ctx.setLineDash([]);
 
-      // Slope angle
+      // Slope angle label (dimmed)
       const angleDeg = Math.atan2(hE - hS, offEnd - offStart) * 180 / Math.PI;
       const midPx    = this._elev2px((offStart + offEnd) / 2, (hS + hE) / 2);
-      ctx.fillStyle = isActive ? '#88aacc' : '#446688';
-      ctx.font = (isActive ? 'bold ' : '') + '11px sans-serif';
-      ctx.fillText(angleDeg.toFixed(1) + '\u00b0', midPx.x + 4, midPx.y - 6);
-
-      // Handles — only for the active wall bevel (when in wall mode)
-      if (isActive) {
-        this._drawHandle(ctx, bHs, this._dragging === 'heightStart', 'height');
-        this._drawHandle(ctx, bHe, this._dragging === 'heightEnd',   'height');
-        this._drawHandle(ctx, bOs, this._dragging === 'offsetStart', 'offset');
-        this._drawHandle(ctx, bOe, this._dragging === 'offsetEnd',   'offset');
-      }
+      ctx.fillStyle = '#446688';
+      ctx.font = '10px sans-serif';
+      ctx.fillText(angleDeg.toFixed(1) + '\u00b0 (legacy)', midPx.x + 4, midPx.y - 6);
     });
 
-    // ── Draw all CEILING bevels (always visible, regardless of mode) ──────────
+    // ── Draw all CEILING bevels ───────────────────────────────────────────────
     const allCeilingBevels = this._getBevels('ceiling');
     allCeilingBevels.forEach((cb, idx) => {
-      const isActive = this._mode === 'ceiling' && idx === this._getActiveIdx('ceiling');
+      const isActive = idx === this._getActiveIdx();
       const offStart = cb.offsetStart;
       const offEnd   = cb.offsetEnd !== null ? cb.offsetEnd : wallLen;
       const hS = cb.heightStart;
@@ -948,8 +850,8 @@ export class SideElevationEditor {
       }
     });
 
-    // ── Empty-state overlay when in ceiling mode with no bevels yet ───────────
-    if (this._mode === 'ceiling' && allCeilingBevels.length === 0) {
+    // ── Empty-state overlay when no slopes exist yet ──────────────────────────
+    if (allCeilingBevels.length === 0) {
       const msgX = cw / 2;
       const msgY = ch / 2 - 20;
       ctx.fillStyle = 'rgba(34,204,170,0.13)';
@@ -957,7 +859,7 @@ export class SideElevationEditor {
       ctx.fillStyle = '#22ccaa';
       ctx.font = 'bold 16px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('\u2302 Roof Slope mode', msgX, msgY);
+      ctx.fillText('\u2302 Roof Slope', msgX, msgY);
       ctx.font = '13px sans-serif';
       ctx.fillStyle = '#88ddcc';
       ctx.fillText('Click  + Add  to create a roof slope on this wall.', msgX, msgY + 24);
@@ -1013,16 +915,13 @@ export class SideElevationEditor {
     if (bevel) {
       const offStart = bevel.offsetStart;
       const offEnd   = bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen;
-      // Ceiling bevel: offset handles are at floorH; wall bevel: offset handles are at 0
-      const offsetHandleY = this._mode === 'ceiling' ? floorH : 0;
-      // Height labels — use descriptive text for ceiling mode
-      const heightLabel = this._mode === 'ceiling' ? ' m (wall top)' : ' m';
-      addLabel(offStart, bevel.heightStart, bevel.heightStart.toFixed(2) + heightLabel, '#00ddff', false);
-      addLabel(offEnd,   bevel.heightEnd,   bevel.heightEnd.toFixed(2)   + heightLabel, '#00ddff', true);
+      // Ceiling bevel: offset handles are at floorH (top edge)
+      addLabel(offStart, bevel.heightStart, bevel.heightStart.toFixed(2) + ' m (wall top)', '#00ddff', false);
+      addLabel(offEnd,   bevel.heightEnd,   bevel.heightEnd.toFixed(2)   + ' m (wall top)', '#00ddff', true);
       if (offStart > 0.01)
-        addLabel(offStart, offsetHandleY, offStart.toFixed(2) + ' m \u2192', '#ffaa00', false);
+        addLabel(offStart, floorH, offStart.toFixed(2) + ' m \u2192', '#ffaa00', false);
       if (offEnd < wallLen - 0.01)
-        addLabel(offEnd, offsetHandleY, '\u2190 ' + offEnd.toFixed(2) + ' m', '#ffaa00', true);
+        addLabel(offEnd, floorH, '\u2190 ' + offEnd.toFixed(2) + ' m', '#ffaa00', true);
     }
     addLabel(wallLen / 2, 0, 'L = ' + wallLen.toFixed(2) + ' m', '#888888', false);
   }
@@ -1037,29 +936,18 @@ export class SideElevationEditor {
     const { x: px, y: py } = this._canvasMousePos(e);
     const r = HANDLE_HIT_RADIUS * HANDLE_HIT_MULTIPLIER;
 
-    // 1. Check handles of the active bevel first (positions differ per mode)
+    // 1. Check handles of the active bevel first
+    // Ceiling bevel: orange offset handles at floorH (top), cyan height handles at bevel height
     const active = this._getActiveBevel();
     if (active) {
       const offStart = active.offsetStart;
       const offEnd   = active.offsetEnd !== null ? active.offsetEnd : wallLen;
-      let handles;
-      if (this._mode === 'ceiling') {
-        // Ceiling mode: orange offset handles at floorH (top), cyan height handles at bevel height
-        handles = [
-          { name: 'heightStart', pos: this._elev2px(offStart, active.heightStart) },
-          { name: 'heightEnd',   pos: this._elev2px(offEnd,   active.heightEnd)   },
-          { name: 'offsetStart', pos: this._elev2px(offStart, floorH)             },
-          { name: 'offsetEnd',   pos: this._elev2px(offEnd,   floorH)             },
-        ];
-      } else {
-        // Wall mode: orange offset handles at 0 (floor), cyan height handles at bevel height
-        handles = [
-          { name: 'heightStart', pos: this._elev2px(offStart, active.heightStart) },
-          { name: 'heightEnd',   pos: this._elev2px(offEnd,   active.heightEnd)   },
-          { name: 'offsetStart', pos: this._elev2px(offStart, 0)                  },
-          { name: 'offsetEnd',   pos: this._elev2px(offEnd,   0)                  },
-        ];
-      }
+      const handles = [
+        { name: 'heightStart', pos: this._elev2px(offStart, active.heightStart) },
+        { name: 'heightEnd',   pos: this._elev2px(offEnd,   active.heightEnd)   },
+        { name: 'offsetStart', pos: this._elev2px(offStart, floorH)             },
+        { name: 'offsetEnd',   pos: this._elev2px(offEnd,   floorH)             },
+      ];
       for (const h of handles) {
         if (Math.hypot(px - h.pos.x, py - h.pos.y) < r) {
           this._dragging = h.name;
@@ -1103,19 +991,11 @@ export class SideElevationEditor {
 
     switch (this._dragging) {
       case 'heightStart':
-        if (this._mode === 'ceiling') {
-          // Ceiling height must stay between minimum and the full floor height
-          bevel.heightStart = Math.max(MIN_BEVEL_HEIGHT, Math.min(floorH, ev.y));
-        } else {
-          bevel.heightStart = Math.max(MIN_BEVEL_HEIGHT, ev.y);
-        }
+        // Ceiling height must stay between minimum and the full floor height
+        bevel.heightStart = Math.max(MIN_BEVEL_HEIGHT, Math.min(floorH, ev.y));
         break;
       case 'heightEnd':
-        if (this._mode === 'ceiling') {
-          bevel.heightEnd = Math.max(MIN_BEVEL_HEIGHT, Math.min(floorH, ev.y));
-        } else {
-          bevel.heightEnd = Math.max(MIN_BEVEL_HEIGHT, ev.y);
-        }
+        bevel.heightEnd = Math.max(MIN_BEVEL_HEIGHT, Math.min(floorH, ev.y));
         break;
       case 'offsetStart':
         bevel.offsetStart = Math.max(0, Math.min(ev.x, offEnd - MIN_BEVEL_WIDTH));
