@@ -152,8 +152,14 @@ export class BuildingGenerator {
         .filter(b => b.wallIndex === i)
         .sort((a, b) => a.offsetStart - b.offsetStart);
 
-      // Build the piecewise top-profile for this wall
-      const topProfile = this._computeTopProfile(bevels, wallLen, floorH);
+      // Build the piecewise top-profile for this wall, then cap it to any
+      // ceiling bevels on the same segment so the wall automatically follows
+      // the ceiling slope without requiring a separate manual wall bevel.
+      const rawProfile    = this._computeTopProfile(bevels, wallLen, floorH);
+      const ceilingConstr = (floor.ceilingBevels || []).filter(cb => cb.wallIndex === i);
+      const topProfile    = ceilingConstr.length > 0
+        ? this._capProfileToCeilingBevels(rawProfile, ceilingConstr, wallLen, floorH)
+        : rawProfile;
 
       // Build wall cross-section shape in local XY (X = along wall, Y = up).
       // Bottom edge: left→right. Top edge: traverse profile right→left.
@@ -248,6 +254,60 @@ export class BuildingGenerator {
       }
     }
     return topProfile[topProfile.length - 1]?.h ?? 0;
+  }
+
+  /**
+   * Return the constrained ceiling height at x, taking into account all given
+   * ceiling bevels for this wall.  Outside every bevel's range the ceiling is
+   * at floorH (unconstrained).  Inside a bevel's range the height is linearly
+   * interpolated and clamped to [MIN_WALL_HEIGHT, floorH].  When multiple
+   * bevels overlap at x the most restrictive (lowest) value is returned.
+   */
+  _ceilingHeightAt(ceilingBevels, wallLen, floorH, x) {
+    let h = floorH;
+    for (const cb of ceilingBevels) {
+      const oStart = Math.max(0, Math.min(wallLen, cb.offsetStart));
+      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, cb.offsetEnd !== null ? cb.offsetEnd : wallLen));
+      if (x < oStart - 0.0001 || x > oEnd + 0.0001) continue;
+      const span = oEnd - oStart;
+      const t    = span > 0.0001 ? Math.max(0, Math.min(1, (x - oStart) / span)) : 0;
+      const hCeil = Math.max(MIN_WALL_HEIGHT, cb.heightStart + (cb.heightEnd - cb.heightStart) * t);
+      h = Math.min(h, hCeil);
+    }
+    return h;
+  }
+
+  /**
+   * Given a piecewise top-profile (from _computeTopProfile) and a list of
+   * ceiling bevels for the same wall, return a new profile where every height
+   * is capped to min(wallHeight, ceilingHeight).
+   *
+   * To preserve accuracy, ceiling-bevel boundary x-values are inserted into
+   * the profile so the transition points are represented exactly.
+   */
+  _capProfileToCeilingBevels(topProfile, ceilingBevels, wallLen, floorH) {
+    if (ceilingBevels.length === 0) return topProfile;
+
+    // Collect all x positions: existing profile + all ceiling bevel boundaries
+    const xSet = new Set(topProfile.map(pt => pt.x));
+    for (const cb of ceilingBevels) {
+      xSet.add(Math.max(0, Math.min(wallLen, cb.offsetStart)));
+      const oEnd = cb.offsetEnd !== null ? cb.offsetEnd : wallLen;
+      xSet.add(Math.max(0, Math.min(wallLen, oEnd)));
+    }
+
+    // Sort, then for each x emit a profile point capped to the ceiling height.
+    // Where the ceiling constraint changes the height, insert a vertical snap
+    // so the transition is immediate (matching _computeTopProfile convention).
+    const xs = [...xSet].sort((a, b) => a - b);
+    const result = [];
+    for (const x of xs) {
+      const wh   = this._topProfileHeightAt(topProfile, x);
+      const ch   = this._ceilingHeightAt(ceilingBevels, wallLen, floorH, x);
+      const h    = Math.min(wh, ch);
+      result.push({ x, h });
+    }
+    return result;
   }
 
   /** Get wall opening holes, clamped to the piecewise top profile. */
