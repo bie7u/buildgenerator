@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { Building } from './models/Building.js';
-import { BuildingConnection } from './models/BuildingConnection.js';
 import { SceneManager } from './SceneManager.js';
 import { GridSystem } from './GridSystem.js';
 import { FloorPlanEditor } from './editors/FloorPlanEditor.js';
@@ -12,7 +11,6 @@ import { UIManager } from './ui/UIManager.js';
 // Application state object
 const app = {
   buildings: [new Building()],
-  connections: [],              // BuildingConnection[]
   currentBuildingIndex: 0,
   currentFloorIndex: 0,
   mode: '2d',

@@ -5,8 +5,6 @@ import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { Wall } from '../models/Wall.js';
 import { FloorHole } from '../models/FloorHole.js';
-import { BuildingConnection } from '../models/BuildingConnection.js';
-import * as THREE from 'three';
 
 // Max position difference (metres) used when matching an element on another
 // floor as a copy of the currently-selected element.
@@ -19,8 +17,6 @@ export class UIManager {
     this._bindTools();
     this._bindBuildingSettings();
     this._bindQuickActions();
-    this._bindShapeType();
-    this._bindConnections();
     this._updateBuildingSelector();
     this._updateFloorSelector();
     this.updateBuildingInfo();
@@ -230,185 +226,6 @@ export class UIManager {
     });
   }
 
-  // ── Shape type quick-generator ────────────────────────────────────────────
-  /**
-   * Pre-defined footprint templates.
-   * All coordinates are centred around origin in XZ plane (THREE.Vector2 y = Z).
-   * Scale: 1 unit = 1 metre.  Points are listed CW so normalizeContourWinding
-   * will flip them to CCW automatically before generation.
-   */
-  _shapeContours() {
-    const W = 10, D = 8;     // overall bounding box: 10 m wide × 8 m deep
-    const hw = W / 2, hd = D / 2;
-    const t = W / 3;         // arm thickness for compound shapes
-
-    return {
-      'rect': [
-        { x: -hw, y: -hd }, { x:  hw, y: -hd },
-        { x:  hw, y:  hd }, { x: -hw, y:  hd },
-      ],
-      // L-shape: full square minus top-right quadrant
-      'l-shape': [
-        { x: -hw, y: -hd }, { x:  hw, y: -hd },
-        { x:  hw, y:   0 }, { x:   0, y:   0 },
-        { x:   0, y:  hd }, { x: -hw, y:  hd },
-      ],
-      // T-shape: horizontal bar on top, vertical stem below
-      't-shape': [
-        { x: -hw, y: -hd   }, { x:  hw, y: -hd   },
-        { x:  hw, y: -hd+t }, { x:  t/2, y: -hd+t },
-        { x:  t/2, y:  hd  }, { x: -t/2, y:  hd  },
-        { x: -t/2, y: -hd+t }, { x: -hw, y: -hd+t },
-      ],
-      // U-shape: open at the top
-      'u-shape': [
-        { x: -hw, y: -hd }, { x:  hw, y: -hd },
-        { x:  hw, y:  hd }, { x:  hw-t, y:  hd },
-        { x:  hw-t, y: -hd+t }, { x: -hw+t, y: -hd+t },
-        { x: -hw+t, y:  hd }, { x: -hw, y:  hd },
-      ],
-    };
-  }
-
-  _bindShapeType() {
-    const app = this.app;
-    const contours = this._shapeContours();
-
-    document.querySelectorAll('.shape-btn[data-shape]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const key = btn.getAttribute('data-shape');
-        const pts = contours[key];
-        if (!pts) return;
-
-        // Confirm replacement if contour already exists
-        const existing = app.building.getFloorContour(app.currentFloorIndex);
-        if (existing.length >= 3) {
-          if (!confirm('Replace the current contour with the selected shape?')) return;
-        }
-
-        const newContour = pts.map(p => new THREE.Vector2(p.x, p.y));
-
-        if (app.currentFloorIndex === 0) {
-          app.building.contour = newContour;
-        } else {
-          const floor = app.building.getFloor(app.currentFloorIndex);
-          if (floor) floor.contour = newContour;
-        }
-
-        app.building.normalizeAllContourWindings();
-        app.editor.selectedElement = null;
-        app.editor.redraw();
-        this.updateBuildingInfo();
-      });
-    });
-  }
-
-  // ── Connections ───────────────────────────────────────────────────────────
-  _bindConnections() {
-    const app = this.app;
-
-    document.getElementById('btn-add-connection').addEventListener('click', () => {
-      this._populateConnectionBuildingSelects();
-      document.getElementById('connection-form').style.display = '';
-      document.getElementById('btn-add-connection').style.display = 'none';
-    });
-
-    document.getElementById('btn-conn-cancel').addEventListener('click', () => {
-      document.getElementById('connection-form').style.display = 'none';
-      document.getElementById('btn-add-connection').style.display = '';
-    });
-
-    document.getElementById('btn-conn-confirm').addEventListener('click', () => {
-      const fromIdx = parseInt(document.getElementById('conn-from').value, 10);
-      const toIdx   = parseInt(document.getElementById('conn-to').value,   10);
-      if (fromIdx === toIdx) {
-        alert('Cannot connect a building to itself — please select two different buildings.');
-        return;
-      }
-      const type  = document.getElementById('conn-type').value;
-      const label = document.getElementById('conn-label').value.trim();
-
-      app.connections.push(new BuildingConnection(fromIdx, toIdx, type, label));
-
-      document.getElementById('connection-form').style.display = 'none';
-      document.getElementById('btn-add-connection').style.display = '';
-      document.getElementById('conn-label').value = '';
-
-      this._renderConnectionsList();
-    });
-  }
-
-  _populateConnectionBuildingSelects() {
-    const app = this.app;
-    for (const id of ['conn-from', 'conn-to']) {
-      const sel = document.getElementById(id);
-      sel.innerHTML = '';
-      for (let i = 0; i < app.buildings.length; i++) {
-        const opt = document.createElement('option');
-        opt.value = i;
-        opt.textContent = `Building ${i + 1}`;
-        sel.appendChild(opt);
-      }
-    }
-    // Default: from = current, to = next (if exists)
-    document.getElementById('conn-from').value = app.currentBuildingIndex;
-    const toDefault = app.currentBuildingIndex === 0 ? 1 : 0;
-    document.getElementById('conn-to').value = Math.min(toDefault, app.buildings.length - 1);
-  }
-
-  /** Re-render the flat list of existing connections. */
-  _renderConnectionsList() {
-    const app = this.app;
-    const list = document.getElementById('connections-list');
-    list.innerHTML = '';
-
-    if (app.connections.length === 0) {
-      list.innerHTML = '<p class="hint-text">No connections yet.</p>';
-      return;
-    }
-
-    app.connections.forEach((conn, idx) => {
-      const item = document.createElement('div');
-      item.className = 'conn-item';
-
-      const badge = document.createElement('span');
-      badge.className = `conn-type-badge conn-type-${conn.type}`;
-      badge.textContent = conn.type;
-
-      const info = document.createElement('div');
-      info.className = 'conn-item-info';
-
-      const title = document.createElement('div');
-      title.className = 'conn-item-title';
-      title.textContent = conn.label || `B${conn.buildingIndexA + 1} ↔ B${conn.buildingIndexB + 1}`;
-
-      const meta = document.createElement('div');
-      meta.className = 'conn-item-meta';
-      meta.textContent = `Building ${conn.buildingIndexA + 1} ↔ Building ${conn.buildingIndexB + 1}`;
-      if (conn.label) meta.textContent += ` · ${conn.type}`;
-
-      info.appendChild(title);
-      info.appendChild(meta);
-
-      const del = document.createElement('button');
-      del.className = 'conn-delete-btn';
-      del.textContent = '✕';
-      del.title = 'Remove connection';
-      del.addEventListener('click', () => {
-        // Use object identity to find the correct index at deletion time,
-        // so stale closures never remove the wrong connection.
-        const currentIdx = app.connections.indexOf(conn);
-        if (currentIdx !== -1) app.connections.splice(currentIdx, 1);
-        this._renderConnectionsList();
-      });
-
-      item.appendChild(badge);
-      item.appendChild(info);
-      item.appendChild(del);
-      list.appendChild(item);
-    });
-  }
-
   // ── Building selector ─────────────────────────────────────────────────────
   _updateBuildingSelector() {
     const sel = document.getElementById('building-select');
@@ -420,15 +237,6 @@ export class UIManager {
       sel.appendChild(opt);
     }
     sel.value = this.app.currentBuildingIndex;
-
-    // Keep connections panel in sync (building labels may have changed)
-    this._renderConnectionsList();
-
-    // Hide add-connection button if there's only one building
-    const addBtn = document.getElementById('btn-add-connection');
-    if (addBtn) {
-      addBtn.style.display = this.app.buildings.length > 1 ? '' : 'none';
-    }
   }
 
   // ── Floor selector ────────────────────────────────────────────────────────

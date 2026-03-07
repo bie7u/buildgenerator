@@ -56,17 +56,6 @@
     <!-- LEFT PANEL: Tools + Settings -->
     <div id="left-panel">
       <div class="panel-section">
-        <div class="panel-title">SHAPE TYPE</div>
-        <div class="shape-grid">
-          <button class="shape-btn" data-shape="rect"    title="Rectangle">▭ Rectangle</button>
-          <button class="shape-btn" data-shape="l-shape" title="L-Shape">⌐ L-Shape</button>
-          <button class="shape-btn" data-shape="t-shape" title="T-Shape">⊤ T-Shape</button>
-          <button class="shape-btn" data-shape="u-shape" title="U-Shape">⊓ U-Shape</button>
-        </div>
-        <p class="hint-text" style="margin-top:4px">Generates a preset footprint on the current floor. Use "Draw Contour" for a custom shape.</p>
-      </div>
-
-      <div class="panel-section">
         <div class="panel-title">TOOLS</div>
         <button class="tool-btn active" data-tool="select" title="Select and edit elements">Select</button>
         <button class="tool-btn" data-tool="move" title="Click and drag any element to move it">Move</button>
@@ -150,41 +139,6 @@
           <div class="info-row"><span class="info-key">Int. Walls:</span><span id="info-walls">0</span></div>
           <div class="info-row"><span class="info-key">Windows:</span><span id="info-windows">0</span></div>
           <div class="info-row"><span class="info-key">Doors:</span><span id="info-doors">0</span></div>
-        </div>
-      </div>
-
-      <div class="panel-section" id="connections-panel">
-        <div class="panel-title">CONNECTIONS</div>
-        <div id="connections-list">
-          <p class="hint-text">No connections yet.</p>
-        </div>
-        <button class="tool-btn" id="btn-add-connection" style="margin-top:6px">+ Add Connection</button>
-        <div id="connection-form" style="display:none;margin-top:8px">
-          <div class="prop-row" style="flex-direction:column;gap:4px">
-            <label class="setting-label" for="conn-from">From building</label>
-            <select id="conn-from" class="prop-input"></select>
-          </div>
-          <div class="prop-row" style="flex-direction:column;gap:4px;margin-top:4px">
-            <label class="setting-label" for="conn-to">To building</label>
-            <select id="conn-to" class="prop-input"></select>
-          </div>
-          <div class="prop-row" style="flex-direction:column;gap:4px;margin-top:4px">
-            <label class="setting-label" for="conn-type">Type</label>
-            <select id="conn-type" class="prop-input">
-              <option value="corridor">Corridor</option>
-              <option value="bridge">Bridge</option>
-              <option value="stairs">Stairs</option>
-              <option value="passage">Passage</option>
-            </select>
-          </div>
-          <div class="prop-row" style="flex-direction:column;gap:4px;margin-top:4px">
-            <label class="setting-label" for="conn-label">Label (optional)</label>
-            <input type="text" id="conn-label" class="prop-input" placeholder="e.g. Main corridor" />
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <button class="tool-btn" id="btn-conn-confirm" style="flex:1;background:#1a3a1a;border-color:#2a5a2a;color:#88ff88">Confirm</button>
-            <button class="tool-btn" id="btn-conn-cancel" style="flex:1">Cancel</button>
-          </div>
         </div>
       </div>
 
