@@ -64,6 +64,8 @@ export class SideElevationEditor {
     this._modeCeilingBtn = null;
     this._depthLbl       = null;
     this._depthInput     = null;
+    this._btnAllWalls    = null;
+    this._hintEl         = null;
     this._visible        = false;
 
     // Active drag handle: null | 'heightStart' | 'heightEnd' | 'offsetStart' | 'offsetEnd'
@@ -140,8 +142,8 @@ export class SideElevationEditor {
     modeWall.title = 'Edit wall bevels (sloped wall tops)';
     this._modeWallBtn = modeWall;
 
-    const modeCeiling = this._makeBtn('\u007e\u00a0Ceiling', () => this._setMode('ceiling'));
-    modeCeiling.title = 'Edit ceiling bevels (sloped ceiling panels)';
+    const modeCeiling = this._makeBtn('\u2302\u00a0Roof Slope', () => this._setMode('ceiling'));
+    modeCeiling.title = 'Roof Slope / Ceiling Bevel — lower the wall top near this edge to create a sloped roof. Click +\u00a0Add, then drag the cyan handles down.';
     this._modeCeilingBtn = modeCeiling;
 
     // Depth input — visible only in ceiling mode
@@ -152,23 +154,39 @@ export class SideElevationEditor {
     const depthInput = document.createElement('input');
     depthInput.type = 'number';
     depthInput.min = '0.1';
-    depthInput.max = '20';
+    depthInput.max = '50';
     depthInput.step = '0.5';
     depthInput.value = '2.0';
-    depthInput.title = 'How far the sloped ceiling extends into the room (metres)';
+    depthInput.title = 'How far the sloped surface extends into the room (m). For a full gable roof set this to half the building width.';
     depthInput.style.cssText = [
       'width:52px', 'background:#2a2a2a', 'color:#ccc',
       'border:1px solid #444', 'border-radius:4px',
       'padding:2px 4px', 'font-size:11px', 'display:none',
     ].join(';');
+    depthInput.addEventListener('change', () => {
+      const val = parseFloat(depthInput.value);
+      if (!isNaN(val) && val > 0) {
+        const bevel = this._getActiveBevel();
+        if (bevel && this._mode === 'ceiling') { bevel.depth = val; this.redraw(); }
+      }
+    });
     depthInput.addEventListener('input', () => {
       const val = parseFloat(depthInput.value);
       if (!isNaN(val) && val > 0) {
         const bevel = this._getActiveBevel();
-        if (bevel && this._mode === 'ceiling') bevel.depth = val;
+        if (bevel && this._mode === 'ceiling') { bevel.depth = val; this.redraw(); }
       }
     });
     this._depthInput = depthInput;
+
+    // "Apply to all walls" button — visible only in ceiling mode
+    const btnAllWalls = this._makeBtn('\u27f3\u00a0All Walls', () => this._applyToAllWalls());
+    btnAllWalls.title = 'Copy this roof slope to every wall on this floor (quick hip-roof)';
+    btnAllWalls.style.display = 'none';
+    btnAllWalls.style.background = '#1a2a3a';
+    btnAllWalls.style.borderColor = '#3a6a9a';
+    btnAllWalls.style.color = '#88bbee';
+    this._btnAllWalls = btnAllWalls;
 
     // Separator 2
     const sep2 = document.createElement('span');
@@ -194,10 +212,12 @@ export class SideElevationEditor {
     btnDel.style.borderColor = '#7a3a3a';
     btnDel.style.color = '#ee8888';
 
-    // Hint
+    // Hint (mode-dependent — updated by _updateHint)
     const hint = document.createElement('span');
+    hint.id = 'elevation-hint';
     hint.style.cssText = 'color:#555;font-size:10px;flex:1';
     hint.textContent = 'Drag cyan \u2195 (height) or orange \u2194 (region). Right-click \u2192 delete.';
+    this._hintEl = hint;
 
     // Close
     const btnClose = this._makeBtn('\u2715\u00a0Close', () => this.app.setMode('2d'));
@@ -209,6 +229,7 @@ export class SideElevationEditor {
       sep,
       modeWall, modeCeiling,
       depthLbl, depthInput,
+      btnAllWalls,
       sep2,
       bevelLbl, bevelPrev, bevelCnt, bevelNext,
       btnAdd, btnDel,
@@ -384,12 +405,38 @@ export class SideElevationEditor {
 
   _updateModeButtons() {
     if (!this._modeWallBtn || !this._modeCeilingBtn) return;
-    if (this._mode === 'wall') {
+    const isCeiling = this._mode === 'ceiling';
+    if (!isCeiling) {
       this._modeWallBtn.style.outline    = '2px solid #5588cc';
       this._modeCeilingBtn.style.outline = '';
     } else {
       this._modeWallBtn.style.outline    = '';
       this._modeCeilingBtn.style.outline = '2px solid #22bbaa';
+    }
+    if (this._btnAllWalls) this._btnAllWalls.style.display = isCeiling ? '' : 'none';
+    this._updateHint();
+  }
+
+  /** Update the hint text based on current mode and bevel count. */
+  _updateHint() {
+    if (!this._hintEl) return;
+    if (this._mode === 'ceiling') {
+      const n = this._getBevels('ceiling').length;
+      if (n === 0) {
+        this._hintEl.style.color = '#998844';
+        this._hintEl.textContent =
+          '\u2302 Click +\u00a0Add to create a roof slope on this wall. ' +
+          'Drag cyan \u2195 handles down to lower the wall edge. ' +
+          'Depth = how far the slope extends into the room.';
+      } else {
+        this._hintEl.style.color = '#555';
+        this._hintEl.textContent =
+          'Cyan \u2195 = wall height at outer edge  |  Orange \u2194 = region boundary  |  ' +
+          'Depth input = how far slope extends inward  |  Right-click \u2192 delete.';
+      }
+    } else {
+      this._hintEl.style.color = '#555';
+      this._hintEl.textContent = 'Drag cyan \u2195 (height) or orange \u2194 (region). Right-click \u2192 delete.';
     }
   }
 
@@ -455,6 +502,7 @@ export class SideElevationEditor {
       ? (this._getActiveIdx() + 1) + ' / ' + count
       : 'none';
     this._syncDepthInput();
+    this._updateHint();
   }
 
   _updateTitle() {
@@ -514,7 +562,10 @@ export class SideElevationEditor {
     if (!bevel) {
       const { wallLen, floorH } = this._getWallBase();
       if (this._mode === 'ceiling') {
-        bevel = new CeilingBevel(this.wallIndex, floorH, floorH, 0, null);
+        // Start at 50% of floor height so the slope is immediately visible
+        const initH = Math.max(MIN_BEVEL_HEIGHT, floorH * 0.5);
+        const initDepth = Math.min(Math.max(1.0, Math.round(wallLen * 0.4 * 10) / 10), 10.0);
+        bevel = new CeilingBevel(this.wallIndex, initH, initH, 0, null, initDepth);
         floor.ceilingBevels.push(bevel);
         const sorted = this._getBevels('ceiling');
         this._activeCeilingBevelIdx = sorted.findIndex(bv => bv === bevel);
@@ -561,25 +612,30 @@ export class SideElevationEditor {
     const { s, e } = gaps[0];
     const gapSize = e - s;
 
-    // Place the bevel in the right-side portion of the gap so there is room
-    // on the left for a future second bevel.  If the gap is small, use it all.
+    // For ceiling mode: first bevel always covers the full gap (full wall effect).
+    // For wall mode (or subsequent ceiling bevels): split the gap.
     let bevelStart = s;
     const bevelEnd   = e;
-    if (gapSize > MIN_BEVEL_WIDTH * 3) {
+    if (this._mode !== 'ceiling' && gapSize > MIN_BEVEL_WIDTH * 3) {
       bevelStart = s + Math.round(gapSize / 2 * 10) / 10; // round to 0.1 m
     }
 
     const snapEnd = Math.abs(bevelEnd - wallLen) < SNAP_TO_END_THRESHOLD ? null : bevelEnd;
+    const snapStart = Math.abs(bevelStart) < SNAP_TO_END_THRESHOLD ? 0 : bevelStart;
 
     let newBevel;
     if (this._mode === 'ceiling') {
-      // Ceiling bevel starts at 80 % of floor height (ceiling drops near the wall)
+      // Default height: 50% of floor height — immediately creates a dramatic, visible slope.
+      // Default depth: cover ~40% of wall length, capped at 10 m — enough for a real roof slope.
+      const initH     = Math.max(MIN_BEVEL_HEIGHT, Math.round(floorH * 0.5 * 10) / 10);
+      const initDepth = Math.min(Math.max(1.0, Math.round(wallLen * 0.4 * 10) / 10), 10.0);
       newBevel = new CeilingBevel(
         this.wallIndex,
-        Math.max(MIN_BEVEL_HEIGHT, floorH * 0.8),
-        Math.max(MIN_BEVEL_HEIGHT, floorH * 0.8),
-        bevelStart,
+        initH,
+        initH,
+        snapStart,
         snapEnd,
+        initDepth,
       );
       floor.ceilingBevels.push(newBevel);
       const sorted = this._getBevels('ceiling');
@@ -601,6 +657,7 @@ export class SideElevationEditor {
 
     this._updateBevelLabel();
     this._updateTitle();
+    this._syncDepthInput();
     this.redraw();
   }
 
@@ -628,7 +685,59 @@ export class SideElevationEditor {
     this.redraw();
   }
 
-  // ── View / coordinate transforms ───────────────────────────────────────────
+  /**
+   * Copy the active ceiling bevel's height and depth to ALL walls on this floor
+   * that do not already have a ceiling bevel, producing a uniform hip-roof effect.
+   */
+  _applyToAllWalls() {
+    const floor  = this._getFloor();
+    const b      = this.app.building;
+    if (!floor || !b) return;
+
+    const src = this._getActiveBevel();
+    if (!src || this._mode !== 'ceiling') return;
+
+    const contour   = b.getFloorContour(this.floorIndex);
+    const wallCount = contour.length;
+    const hS    = src.heightStart;
+    const hE    = src.heightEnd;
+    const depth = src.depth;
+
+    let added = 0;
+    for (let wi = 0; wi < wallCount; wi++) {
+      if (wi === this.wallIndex) continue; // already has this bevel
+      // Skip walls that already have any ceiling bevel
+      const existing = (floor.ceilingBevels || []).filter(cb => cb.wallIndex === wi);
+      if (existing.length > 0) continue;
+
+      const p1 = contour[wi];
+      const p2 = contour[(wi + 1) % wallCount];
+      const wLen = p1.distanceTo(p2);
+
+      // Use the same height ratios as the source bevel, scaled to the wall's height
+      const { floorH } = this._getWallBase();
+      const ratio = floorH > 0 ? hS / floorH : 0.5;
+      const newH = Math.max(MIN_BEVEL_HEIGHT, Math.min(floorH, Math.round(ratio * floorH * 10) / 10));
+
+      floor.ceilingBevels.push(new CeilingBevel(wi, newH, newH, 0, null, Math.min(depth, wLen / 2)));
+      added++;
+    }
+
+    if (added > 0) {
+      this._updateTitle();
+      this.redraw();
+      // Brief flash of confirmation in the title
+      const el = document.getElementById('elevation-title');
+      if (el) {
+        const orig = el.textContent;
+        el.textContent = '\u2714 Roof slope applied to ' + added + ' wall' + (added > 1 ? 's' : '') + '!';
+        el.style.color = '#88ee88';
+        setTimeout(() => { el.textContent = orig; el.style.color = ''; }, 2000);
+      }
+    }
+  }
+
+
 
   _fitView() {
     const canvas = this._canvas;
@@ -818,9 +927,19 @@ export class SideElevationEditor {
       ctx.font = (isActive ? 'bold ' : '') + '11px sans-serif';
       ctx.fillText(angleDeg.toFixed(1) + '\u00b0', midPx.x + 4, midPx.y - 6);
 
+      // ── Depth indicator: label showing depth on the active bevel trapezoid ──
+      // Depth is perpendicular to the wall so it can't be drawn accurately in
+      // the 2D side elevation.  Instead, show a text label on the teal region.
+      if (isActive) {
+        const depthPx = this._elev2px((offStart + offEnd) / 2, floorH);
+        ctx.fillStyle = '#22ccaa';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('depth: ' + cb.depth.toFixed(1) + ' m \u21d0 into room', depthPx.x + 4, depthPx.y + 16);
+      }
+
       // Handles — only for the active ceiling bevel (when in ceiling mode)
-      // Cyan handles ↕ at bottom corners (lowered ceiling level)
-      // Orange handles ↔ at top corners (full ceiling level)
+      // Cyan handles ↕ at bottom corners (lowered wall top height)
+      // Orange handles ↔ at top corners (bevel region boundary)
       if (isActive) {
         this._drawHandle(ctx, bBotL, this._dragging === 'heightStart', 'height');
         this._drawHandle(ctx, bBotR, this._dragging === 'heightEnd',   'height');
@@ -828,6 +947,26 @@ export class SideElevationEditor {
         this._drawHandle(ctx, bTopR, this._dragging === 'offsetEnd',   'offset');
       }
     });
+
+    // ── Empty-state overlay when in ceiling mode with no bevels yet ───────────
+    if (this._mode === 'ceiling' && allCeilingBevels.length === 0) {
+      const msgX = cw / 2;
+      const msgY = ch / 2 - 20;
+      ctx.fillStyle = 'rgba(34,204,170,0.13)';
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.fillStyle = '#22ccaa';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('\u2302 Roof Slope mode', msgX, msgY);
+      ctx.font = '13px sans-serif';
+      ctx.fillStyle = '#88ddcc';
+      ctx.fillText('Click  + Add  to create a roof slope on this wall.', msgX, msgY + 24);
+      ctx.fillStyle = '#556677';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('Then drag the cyan \u2195 handles DOWN to lower the wall edge.', msgX, msgY + 44);
+      ctx.fillText('For a full roof: set Depth \u2248 half the building width, then click \u27f3 All Walls.', msgX, msgY + 60);
+      ctx.textAlign = 'left';
+    }
   }
 
   _drawHandle(ctx, pos, active, kind) {
@@ -876,8 +1015,10 @@ export class SideElevationEditor {
       const offEnd   = bevel.offsetEnd !== null ? bevel.offsetEnd : wallLen;
       // Ceiling bevel: offset handles are at floorH; wall bevel: offset handles are at 0
       const offsetHandleY = this._mode === 'ceiling' ? floorH : 0;
-      addLabel(offStart, bevel.heightStart, bevel.heightStart.toFixed(2) + ' m', '#00ddff', false);
-      addLabel(offEnd,   bevel.heightEnd,   bevel.heightEnd.toFixed(2)   + ' m', '#00ddff', true);
+      // Height labels — use descriptive text for ceiling mode
+      const heightLabel = this._mode === 'ceiling' ? ' m (wall top)' : ' m';
+      addLabel(offStart, bevel.heightStart, bevel.heightStart.toFixed(2) + heightLabel, '#00ddff', false);
+      addLabel(offEnd,   bevel.heightEnd,   bevel.heightEnd.toFixed(2)   + heightLabel, '#00ddff', true);
       if (offStart > 0.01)
         addLabel(offStart, offsetHandleY, offStart.toFixed(2) + ' m \u2192', '#ffaa00', false);
       if (offEnd < wallLen - 0.01)
