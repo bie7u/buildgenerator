@@ -133,11 +133,16 @@ export class SideElevationEditor {
     sep.style.cssText = 'color:#444;font-size:11px';
     sep.textContent = '|';
 
-    // ── Roof Slope label (ceiling mode is now the only mode) ─────────────────
-    const modeCeiling = this._makeBtn('\u2302\u00a0Roof Slope', null);
+    // ── Roof Slope mode label ────────────────────────────────────────────────
+    // (displayed as a styled non-interactive label, not a button)
+    const modeCeiling = document.createElement('span');
+    modeCeiling.textContent = '\u2302\u00a0Roof Slope';
     modeCeiling.title = 'Roof Slope — lower the wall top near this edge to create a sloped roof. Click + Add, then drag the cyan handles down.';
-    modeCeiling.style.outline = '2px solid #22bbaa';
-    modeCeiling.style.cursor = 'default';
+    modeCeiling.style.cssText = [
+      'color:#22ccaa', 'font-size:11px', 'font-weight:700',
+      'border:1px solid #22bbaa', 'border-radius:4px',
+      'padding:3px 9px', 'background:#0a1a18',
+    ].join(';');
     this._modeCeilingBtn = modeCeiling;
 
     // Depth input

@@ -7,6 +7,7 @@ const RISER_HEIGHT_M    = 0.17;   // nominal riser height used to compute step c
 // Wall geometry constants
 const MIN_WALL_HEIGHT           = 0.01;  // minimum allowed wall/bevel height (metres)
 const OPENING_BOUNDARY_TOLERANCE = 0.05; // min clearance between an opening edge and wall end
+const MIN_BEVEL_SEGMENT_LEN     = 0.001; // minimum bevel length to prevent degenerate geometry
 
 export class BuildingGenerator {
   constructor(sceneManager) {
@@ -213,18 +214,24 @@ export class BuildingGenerator {
    */
   _generateWallBevelFillPanels(bevels, wallLen, floorH, wallThick, p1, ndx, ndz, floorBaseY, group) {
     for (const bv of bevels) {
-      const oStart = Math.max(0, Math.min(wallLen, bv.offsetStart));
-      const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, bv.offsetEnd !== null ? bv.offsetEnd : wallLen));
-      const hS     = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, bv.heightStart));
-      const hE     = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, bv.heightEnd));
+      const oStart   = Math.max(0, Math.min(wallLen, bv.offsetStart));
+      const rawOEnd  = bv.offsetEnd !== null ? bv.offsetEnd : wallLen;
+      const oEnd     = Math.max(oStart + MIN_BEVEL_SEGMENT_LEN, Math.min(wallLen, rawOEnd));
+      const hS       = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, bv.heightStart));
+      const hE       = Math.max(MIN_WALL_HEIGHT, Math.min(floorH, bv.heightEnd));
 
       // Skip if the bevel is already at full height (no gap to fill)
-      if (hS >= floorH - 0.001 && hE >= floorH - 0.001) continue;
+      if (hS >= floorH - MIN_BEVEL_SEGMENT_LEN && hE >= floorH - MIN_BEVEL_SEGMENT_LEN) continue;
 
-      // Panel in world space, at the inner wall face (z = wallThick in local space).
-      // Local (x, y, z) → world via matrix: wx = ndx*x + ndz*z + p1.x,
-      //                                      wy = y + floorBaseY,
-      //                                      wz = ndz*x - ndx*z + p1.y
+      // Transform local wall-space coords to world space using the same wall matrix as
+      // _generateExternalWalls:
+      //   m = [ ndx  0  ndz  p1.x ]   (ndx,ndz) = wall direction unit vector
+      //       [  0   1   0   fBy  ]   local Y → world Y (vertical)
+      //       [ ndz  0 -ndx  p1.y ]   local Z → world inward-normal direction
+      //       [  0   0   0    1   ]
+      // So: world_x = ndx*lx + ndz*lz + p1.x
+      //     world_y = ly + floorBaseY
+      //     world_z = ndz*lx - ndx*lz + p1.y
       const wpos = (lx, ly, lz) => [
         ndx * lx + ndz * lz + p1.x,
         ly + floorBaseY,
