@@ -82,11 +82,11 @@ export class BuildingGenerator {
       // and would be silently ignored by Earcut, which can confuse diagnostics.
       // WallBevel wall trimming still works via _computeTopProfile; their inner-face
       // fill panels are generated in _generateExternalWalls.
-      const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor, building.wallThickness);
+      const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor);
       this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, ceilingBevelCuts);
 
       // Sloped ceiling panels for every ceiling bevel on this floor
-      this._generateCeilingBevelMeshes(floorContour, floor, floorBaseY, building.wallThickness, group);
+      this._generateCeilingBevelMeshes(floorContour, floor, floorBaseY, group);
     }
   }
 
@@ -351,34 +351,83 @@ export class BuildingGenerator {
 
   /**
    * Given a piecewise top-profile (from _computeTopProfile) and a list of
-   * ceiling bevels for the same wall, return a new profile where every height
-   * is capped to min(wallHeight, ceilingHeight).
+   * ceiling bevels for the same wall, return a new profile where the wall
+   * height is capped to the ceiling bevel height within each bevel's range.
    *
-   * To preserve accuracy, ceiling-bevel boundary x-values are inserted into
-   * the profile so the transition points are represented exactly.
+   * Vertical snaps (two consecutive profile points at the same x, one at the
+   * previous height and one at the new height) are inserted at bevel boundaries
+   * so the wall has a sharp vertical edge at each bevel start and end — matching
+   * the same convention used by _computeTopProfile for WallBevels.
+   *
+   * Without snaps the profile would create a smoothly sloping exterior wall top
+   * leading up to the bevel region, which is visually wrong.
    */
   _capProfileToCeilingBevels(topProfile, ceilingBevels, wallLen, floorH) {
     if (ceilingBevels.length === 0) return topProfile;
 
-    // Collect all x positions: existing profile + all ceiling bevel boundaries
-    const xSet = new Set(topProfile.map(pt => pt.x));
-    for (const cb of ceilingBevels) {
-      xSet.add(Math.max(0, Math.min(wallLen, cb.offsetStart)));
-      const oEnd = cb.offsetEnd !== null ? cb.offsetEnd : wallLen;
-      xSet.add(Math.max(0, Math.min(wallLen, oEnd)));
+    // Tolerance for "same position" comparisons in profile point coordinates
+    const EPS = 0.0001;
+
+    // Sort ceiling bevels by offsetStart; clamp to wall length
+    const sorted = ceilingBevels
+      .map(cb => ({
+        oS: Math.max(0, Math.min(wallLen, cb.offsetStart)),
+        oE: Math.max(0, Math.min(wallLen, cb.offsetEnd !== null ? cb.offsetEnd : wallLen)),
+        hS: Math.max(MIN_WALL_HEIGHT, Math.min(floorH, cb.heightStart)),
+        hE: Math.max(MIN_WALL_HEIGHT, Math.min(floorH, cb.heightEnd)),
+      }))
+      .filter(cb => cb.oE > cb.oS + EPS)
+      .sort((a, b) => a.oS - b.oS);
+
+    if (sorted.length === 0) return topProfile;
+
+    const result = [];
+    let cursor = 0; // x-position covered so far
+
+    for (const cb of sorted) {
+      // ── Section before this bevel: copy wall profile at full height ──────────
+      if (cb.oS > cursor + EPS) {
+        // Emit profile points (from topProfile) in the range (cursor, cb.oS)
+        if (result.length === 0) {
+          result.push({ x: cursor, h: this._topProfileHeightAt(topProfile, cursor) });
+        }
+        for (const pt of topProfile) {
+          if (pt.x > cursor + EPS && pt.x < cb.oS - EPS) {
+            result.push({ x: pt.x, h: pt.h });
+          }
+        }
+        // Arrive at bevel start at the wall profile height (vertical snap 1 of 2)
+        result.push({ x: cb.oS, h: this._topProfileHeightAt(topProfile, cb.oS) });
+      } else if (result.length === 0) {
+        // Bevel starts right at the wall beginning (cursor === 0)
+        // No full-height section needed, but make sure cursor is defined
+      }
+
+      // ── Vertical snap DOWN into bevel ─────────────────────────────────────────
+      result.push({ x: cb.oS, h: cb.hS });
+
+      // ── Bevel region (wall height follows bevel height) ───────────────────────
+      result.push({ x: cb.oE, h: cb.hE });
+
+      // ── Vertical snap UP out of bevel ─────────────────────────────────────────
+      const hAfter = this._topProfileHeightAt(topProfile, cb.oE);
+      result.push({ x: cb.oE, h: hAfter });
+
+      cursor = cb.oE;
     }
 
-    // Sort, then for each x emit a profile point capped to the ceiling height.
-    // Where the ceiling constraint changes the height, insert a vertical snap
-    // so the transition is immediate (matching _computeTopProfile convention).
-    const xs = [...xSet].sort((a, b) => a - b);
-    const result = [];
-    for (const x of xs) {
-      const wh   = this._topProfileHeightAt(topProfile, x);
-      const ch   = this._ceilingHeightAt(ceilingBevels, wallLen, floorH, x);
-      const h    = Math.min(wh, ch);
-      result.push({ x, h });
+    // ── Section after last bevel: copy wall profile ───────────────────────────
+    if (cursor < wallLen - EPS) {
+      for (const pt of topProfile) {
+        if (pt.x > cursor + EPS && pt.x < wallLen - EPS) {
+          result.push({ x: pt.x, h: pt.h });
+        }
+      }
+      result.push({ x: wallLen, h: this._topProfileHeightAt(topProfile, wallLen) });
+    } else if (result.length === 0 || result[result.length - 1].x < wallLen - EPS) {
+      result.push({ x: wallLen, h: this._topProfileHeightAt(topProfile, wallLen) });
     }
+
     return result;
   }
 
@@ -476,21 +525,21 @@ export class BuildingGenerator {
    * For each CeilingBevel on this floor, compute a rectangular hole in the slab
    * shape-space so the sloped ceiling panel mesh replaces the flat slab there.
    *
-   * IMPORTANT: The hole outer edge is offset `wallThick` inward from the outer
-   * wall face, not at the face itself.  Placing the outer edge exactly on the
-   * outer contour boundary produces a degenerate Shape in THREE.js (a hole
-   * sharing an entire edge with the outer polygon), which the Earcut
-   * triangulator ignores — leaving the flat slab visible instead of sloped.
-   * Starting the hole strictly inside the polygon avoids this problem.
+   * The hole is inset by a tiny epsilon (not wallThick) from the outer wall face
+   * so it starts almost exactly where the sloped panel starts.  Using a large
+   * inset (wallThick=0.2 m) would leave a wide strip of uncut flat ceiling at
+   * the inner wall face, creating a very visible step/ledge on the ceiling.
    *
-   * The wall mesh already covers the 0→wallThick strip, so the missing cut
-   * in that strip is not visible from inside the room.
+   * A non-zero inset is still required: a hole whose outer edge exactly
+   * coincides with the outer polygon boundary is degenerate and silently
+   * ignored by the Earcut triangulator, leaving the flat slab visible.
    *
    * @param {Array}  contour   - floor contour (CCW-on-screen, as normalised by Building)
    * @param {object} floor     - floor object with ceilingBevels[]
-   * @param {number} wallThick - wall thickness in metres
    */
-  _computeCeilingBevelCuts(contour, floor, wallThick) {
+  _computeCeilingBevelCuts(contour, floor) {
+    // Tiny inset so the hole is strictly inside the outer polygon (not degenerate)
+    const HOLE_INSET = 0.002;
     const cuts = [];
     const n = contour.length;
 
@@ -510,14 +559,14 @@ export class BuildingGenerator {
       const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, cb.offsetEnd !== null ? cb.offsetEnd : wallLen));
       const depth  = Math.max(0.1, cb.depth);
 
-      // Hole goes from wallThick to depth inward (strictly inside the slab polygon).
+      // Hole spans from HOLE_INSET to depth inward from outer wall face.
       // Slab shape-space inward direction: (+ndz, +ndx).
-      const innerSpan = depth - wallThick;
+      const innerSpan = depth - HOLE_INSET;
       if (innerSpan <= 0) continue;
 
-      // Outer edge: wallThick inward from the outer wall face
-      const ax = p1.x + oStart * ndx + ndz * wallThick,   ay = -(p1.y + oStart * ndz) + ndx * wallThick;
-      const bx = p1.x + oEnd   * ndx + ndz * wallThick,   by = -(p1.y + oEnd   * ndz) + ndx * wallThick;
+      // Outer edge: HOLE_INSET inward from the outer wall face
+      const ax = p1.x + oStart * ndx + ndz * HOLE_INSET,   ay = -(p1.y + oStart * ndz) + ndx * HOLE_INSET;
+      const bx = p1.x + oEnd   * ndx + ndz * HOLE_INSET,   by = -(p1.y + oEnd   * ndz) + ndx * HOLE_INSET;
       // Inner edge: depth inward from outer face = innerSpan further from ax/bx
       const cx = bx + ndz * innerSpan,   cy = by + ndx * innerSpan;
       const Dx = ax + ndz * innerSpan,   Dy = ay + ndx * innerSpan;
@@ -552,7 +601,7 @@ export class BuildingGenerator {
    *   Δworld_x = +ndz * depth
    *   Δworld_z = -ndx * depth
    */
-  _generateCeilingBevelMeshes(contour, floor, baseY, wallThick, group) {
+  _generateCeilingBevelMeshes(contour, floor, baseY, group) {
     const n = contour.length;
     const floorH = floor.height;
 

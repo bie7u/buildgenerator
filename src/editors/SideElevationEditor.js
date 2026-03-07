@@ -777,7 +777,7 @@ export class SideElevationEditor {
       }
       ctx.setLineDash([]);
 
-      // Slope angle label (dimmed)
+      // Slope angle label (dimmed) — shows wall-top edge slope for legacy bevels
       const angleDeg = Math.atan2(hE - hS, offEnd - offStart) * 180 / Math.PI;
       const midPx    = this._elev2px((offStart + offEnd) / 2, (hS + hE) / 2);
       ctx.fillStyle = '#446688';
@@ -827,8 +827,11 @@ export class SideElevationEditor {
       }
       ctx.setLineDash([]);
 
-      // Slope angle label (degrees) — relative to horizontal
-      const angleDeg = Math.atan2(hE - hS, offEnd - offStart) * 180 / Math.PI;
+      // Slope angle label: actual roof inclination (height change over depth)
+      // Use average of hS and hE for the representative angle
+      const avgH   = (hS + hE) / 2;
+      const depth  = cb.depth;
+      const angleDeg = Math.atan2(floorH - avgH, depth) * 180 / Math.PI;
       const midPx    = this._elev2px((offStart + offEnd) / 2, (hS + hE + floorH * 2) / 4);
       ctx.fillStyle = isActive ? '#66ddbb' : '#336655';
       ctx.font = (isActive ? 'bold ' : '') + '11px sans-serif';
