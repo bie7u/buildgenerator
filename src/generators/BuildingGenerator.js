@@ -77,7 +77,7 @@ export class BuildingGenerator {
       // Ceiling slab — cut floor holes AND bevel regions so the sloped wall
       // top-face (already part of the wall extrusion cap) acts as the ceiling
       const bevelCuts = this._computeBevelCuts(floorContour, floor, building.wallThickness);
-      const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor);
+      const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor, building.wallThickness);
       this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, [...bevelCuts, ...ceilingBevelCuts]);
 
       // Sloped ceiling panels for every ceiling bevel on this floor
@@ -404,10 +404,21 @@ export class BuildingGenerator {
    * For each CeilingBevel on this floor, compute a rectangular hole in the slab
    * shape-space so the sloped ceiling panel mesh replaces the flat slab there.
    *
-   * The hole spans from the outer wall face to `depth` metres inward.
-   * Uses the same slab shape-space conventions as _computeBevelCuts.
+   * IMPORTANT: The hole outer edge is offset `wallThick` inward from the outer
+   * wall face, not at the face itself.  Placing the outer edge exactly on the
+   * outer contour boundary produces a degenerate Shape in THREE.js (a hole
+   * sharing an entire edge with the outer polygon), which the Earcut
+   * triangulator ignores — leaving the flat slab visible instead of sloped.
+   * Starting the hole strictly inside the polygon avoids this problem.
+   *
+   * The wall mesh already covers the 0→wallThick strip, so the missing cut
+   * in that strip is not visible from inside the room.
+   *
+   * @param {Array}  contour   - floor contour (CCW-on-screen, as normalised by Building)
+   * @param {object} floor     - floor object with ceilingBevels[]
+   * @param {number} wallThick - wall thickness in metres
    */
-  _computeCeilingBevelCuts(contour, floor) {
+  _computeCeilingBevelCuts(contour, floor, wallThick) {
     const cuts = [];
     const n = contour.length;
 
@@ -427,14 +438,17 @@ export class BuildingGenerator {
       const oEnd   = Math.max(oStart + 0.001, Math.min(wallLen, cb.offsetEnd !== null ? cb.offsetEnd : wallLen));
       const depth  = Math.max(0.1, cb.depth);
 
-      // Corners in slab shape-space — same formula as _computeBevelCuts but
-      // using depth instead of wallThick.
-      // A = outer at oStart, B = outer at oEnd, C = inner at oEnd, D = inner at oStart
-      // (Using uppercase D to avoid clash with the wall-direction variable dx above.)
-      const ax = p1.x + oStart * ndx,   ay = -(p1.y + oStart * ndz);
-      const bx = p1.x + oEnd   * ndx,   by = -(p1.y + oEnd   * ndz);
-      const cx = bx + ndz * depth,      cy = by + ndx * depth;
-      const Dx = ax + ndz * depth,      Dy = ay + ndx * depth;
+      // Hole goes from wallThick to depth inward (strictly inside the slab polygon).
+      // Slab shape-space inward direction: (+ndz, +ndx).
+      const innerSpan = depth - wallThick;
+      if (innerSpan <= 0) continue;
+
+      // Outer edge: wallThick inward from the outer wall face
+      const ax = p1.x + oStart * ndx + ndz * wallThick,   ay = -(p1.y + oStart * ndz) + ndx * wallThick;
+      const bx = p1.x + oEnd   * ndx + ndz * wallThick,   by = -(p1.y + oEnd   * ndz) + ndx * wallThick;
+      // Inner edge: depth inward from outer face = innerSpan further from ax/bx
+      const cx = bx + ndz * innerSpan,   cy = by + ndx * innerSpan;
+      const Dx = ax + ndz * innerSpan,   Dy = ay + ndx * innerSpan;
 
       const path = new THREE.Path();
       path.moveTo(ax, ay);
@@ -455,6 +469,9 @@ export class BuildingGenerator {
    * The quad spans from the outer wall face (at heights heightStart/heightEnd)
    * to `depth` metres into the room (at full floor height), creating a sloped
    * ceiling that is visible from inside the room when looking upward.
+   *
+   * The inner edge is placed 1 mm below the flat slab bottom to avoid
+   * z-fighting at the flat/sloped transition.
    *
    * Vertex winding: CCW when viewed from below (inside room looking up) so that
    * the face normal points downward and is lit correctly.
@@ -488,12 +505,14 @@ export class BuildingGenerator {
       // 4 world-space corners of the sloped ceiling panel:
       //   A = outer-start  (at wall face, bevel ceiling height)
       //   B = outer-end
-      //   C = inner-end    (depth into room, at full floor height)
+      //   C = inner-end    (depth into room, 1 mm below full floor height to
+      //                     avoid z-fighting with the coplanar slab bottom face)
       //   D = inner-start
-      const Ax = p1.x + oStart * ndx,           Ay = baseY + hS,     Az = p1.y + oStart * ndz;
-      const Bx = p1.x + oEnd   * ndx,           By = baseY + hE,     Bz = p1.y + oEnd   * ndz;
-      const Cx = Bx + ndz * depth,              Cy = baseY + floorH, Cz = Bz - ndx * depth;
-      const Dx = Ax + ndz * depth,              Dy = baseY + floorH, Dz = Az - ndx * depth;
+      const Z_FIGHT_OFFSET = 0.001;
+      const Ax = p1.x + oStart * ndx,   Ay = baseY + hS,                       Az = p1.y + oStart * ndz;
+      const Bx = p1.x + oEnd   * ndx,   By = baseY + hE,                       Bz = p1.y + oEnd   * ndz;
+      const Cx = Bx + ndz * depth,      Cy = baseY + floorH - Z_FIGHT_OFFSET,  Cz = Bz - ndx * depth;
+      const Dx = Ax + ndz * depth,      Dy = baseY + floorH - Z_FIGHT_OFFSET,  Dz = Az - ndx * depth;
 
       // Two triangles, wound CCW when viewed from below (face normal points down,
       // toward the viewer standing inside the room looking up).
